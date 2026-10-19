@@ -1,14 +1,8 @@
 package com.voicestudio.phone
 
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.content.ServiceConnection
-import android.os.Binder
-import android.os.IBinder
 import android.os.SystemClock
-import org.json.JSONObject
-import rikka.shizuku.Shizuku
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
@@ -16,10 +10,15 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
-/** App-side lifetime owner. Uses Shizuku when available, otherwise a Root shell. */
-object ShizukuMicController {
-    private enum class Mode { NONE, SHIZUKU, ROOT }
-
+/**
+ * App-side lifetime owner of the virtual microphone.
+ *
+ * There is exactly one way in: a root shell. The bridge runs as
+ * `su -Z u:r:shell:s0 2000 -c "CLASSPATH=<apk> app_process ... dev.virtualmic.Main"`, because the
+ * injector needs shell UID 2000 and MODIFY_AUDIO_ROUTING. KernelSU/SukiSU style managers grant that
+ * to this app id through their own whitelist; nothing else is involved.
+ */
+object RootMicController {
     @Volatile var active = false; private set
     @Volatile var status = str(R.string.ui_virtual_microphone_is_off); private set
     @Volatile var shellLog = ""; private set
@@ -32,8 +31,6 @@ object ShizukuMicController {
     @Volatile var cellular = false; private set
     @Volatile private var cancelled = AtomicBoolean(false)
     @Volatile private var userStopped = AtomicBoolean(false)
-    @Volatile private var remote: IVirtualMicService? = null
-    @Volatile private var mode = Mode.NONE
     @Volatile private var rootProcess: Process? = null
     @Volatile private var rootReader: Thread? = null
     @Volatile private var rootToken = ""
@@ -44,7 +41,10 @@ object ShizukuMicController {
 
     val phase: MicPhase get() = MicPhase.resolve(active, cancelled.get(), error, shellLog, VirtualMicSession.silentHold)
 
-    /** Runs `su -c id` off the UI thread. Cached briefly so repeated screens do not prompt. */
+    /**
+     * Runs `su -c id` off the UI thread. KernelSU/SukiSU answer with a denial (or a timeout) when this
+     * app id is not on their whitelist, so a false result here means "go grant it in the root manager".
+     */
     fun checkRoot(force: Boolean = false): Boolean {
         val now = SystemClock.elapsedRealtime()
         if (!force && rootCheckedAt != 0L && now - rootCheckedAt < 30_000) return rootOk
@@ -59,12 +59,7 @@ object ShizukuMicController {
 
     @Synchronized fun start(context: Context, target: String, model: String, useOtherProfile: Boolean = false, useAllApps: Boolean = false, useCellular: Boolean = false) {
         check(!active && !VirtualMicSession.isActive && !LiveSession.running)
-        val app = context.applicationContext
-        val shizukuReady = runCatching {
-            Shizuku.pingBinder() && Shizuku.checkSelfPermission() == 0 && Shizuku.getUid() == 2000
-        }.getOrDefault(false)
-        if (shizukuReady) startShizuku(app, target, model, useOtherProfile, useAllApps, useCellular)
-        else startRoot(app, target, model, useOtherProfile, useAllApps, useCellular)
+        startRoot(context.applicationContext, target, model, useOtherProfile, useAllApps, useCellular)
     }
 
     private fun beginSession(target: String, model: String, useOtherProfile: Boolean, useAllApps: Boolean, useCellular: Boolean): AtomicBoolean {
@@ -86,92 +81,12 @@ object ShizukuMicController {
         return cancel
     }
 
-    private fun startShizuku(app: Context, target: String, model: String, useOtherProfile: Boolean, useAllApps: Boolean, useCellular: Boolean) {
-        mode = Mode.SHIZUKU
-        val cancel = beginSession(target, model, useOtherProfile, useAllApps, useCellular)
-        status = str(R.string.ui_preparing_the_microphone_with_shizuku)
-        val ready = CountDownLatch(1)
-        val owner = Binder()
-        val args = Shizuku.UserServiceArgs(ComponentName(app, VirtualMicUserService::class.java))
-            .daemon(false).processNameSuffix("virtual_mic_service").debuggable(false).version(5)
-        val connection = object : ServiceConnection {
-            override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-                if (binder != null) remote = IVirtualMicService.Stub.asInterface(binder)
-                ready.countDown()
-            }
-            override fun onServiceDisconnected(name: ComponentName?) {
-                remote = null
-                if (active) { status = str(R.string.ui_shizuku_disconnected); cancel.set(true); VirtualMicSession.stop() }
-                ready.countDown()
-            }
-        }
-        try { Shizuku.bindUserService(args, connection) }
-        catch (e: Throwable) { active = false; mode = Mode.NONE; throw e }
-        thread(name = "shizuku-mic-controller") {
-            var converterStarted = false
-            val log = File(app.getExternalFilesDir(null), "virtual_mic/shizuku-${System.currentTimeMillis()}.log")
-            log.parentFile?.mkdirs()
-            try {
-                check(ready.await(20, TimeUnit.SECONDS)) { str(R.string.ui_shizuku_service_connection_timed_out) }
-                if (cancel.get()) return@thread
-                val service = remote ?: error(str(R.string.ui_could_not_connect_to_the_shizuku_service))
-                val state = JSONObject(service.startMic(target, 0, useOtherProfile, useAllApps, useCellular, owner))
-                if (state.has("error")) error(state.getString("error"))
-                shellLog = state.getString("log")
-                if (cancel.get()) return@thread
-                val intent = Intent().putExtra("virtual_mic_socket", state.getString("token"))
-                    .putExtra("virtual_mic_port", state.getInt("port")).putExtra("model", model)
-                    .putExtra("bounded_logs", true).putExtra("persistent_mic", true)
-                VirtualMicSession.start(app, intent)
-                converterStarted = true
-                while (!cancel.get() && VirtualMicSession.isActive) {
-                    val next = JSONObject(service.snapshot())
-                    shellLog = next.getString("log")
-                    status = VirtualMicSession.status
-                    if (!next.getBoolean("running")) {
-                        if (useCellular && !cancel.get() && next.optInt("exitCode", 0) != 0)
-                            error = str(R.string.cellular_stalled)
-                        VirtualMicSession.stop()
-                    }
-                    Thread.sleep(500)
-                }
-                status = if (cancel.get()) str(R.string.ui_virtual_microphone_is_off_apps_return_to)
-                    else VirtualMicSession.status + str(R.string.ui_apps_return_to_their_original_microphone)
-            } catch (e: Throwable) {
-                if (!cancel.get()) error = readableError(e.message ?: str(R.string.ui_check_the_connection))
-                status = if (cancel.get()) str(R.string.ui_virtual_microphone_is_off_2) else str(R.string.ui_could_not_start_3, e.message)
-                android.util.Log.e("ShizukuMic", status, e)
-            } finally {
-                runCatching { remote?.stopMic(userStopped.get() && VirtualMicSession.failureMessage == null) }
-                VirtualMicSession.stop()
-                runCatching { remote?.snapshot()?.let {
-                    val last = JSONObject(it)
-                    shellLog = last.getString("log")
-                    if (useCellular && !cancel.get() && last.optInt("exitCode", 0) != 0)
-                        error = str(R.string.cellular_stalled)
-                } }
-                if (!cancel.get()) shellLog.lineSequence().lastOrNull { "FAILED stage=" in it }?.let {
-                    error = readableError(it.substringAfter("message="))
-                }
-                if (converterStarted) VirtualMicSession.failureMessage?.let { error = it }
-                if ("CALL_RESTORE_FAILED" in shellLog) error = str(R.string.cellular_restore_failed)
-                if ("CALL_HANGUP_FAILED" in shellLog) error = str(R.string.cellular_hangup_failed)
-                runCatching { log.writeText(shellLog + "\nAPP_STATUS: " + status) }
-                runCatching { Shizuku.unbindUserService(args, connection, true) }
-                remote = null
-                app.stopService(Intent(app, LiveService::class.java))
-                active = false; mode = Mode.NONE
-            }
-        }
-    }
-
     private fun startRoot(app: Context, target: String, model: String, useOtherProfile: Boolean, useAllApps: Boolean, useCellular: Boolean) {
-        mode = Mode.ROOT
         val cancel = beginSession(target, model, useOtherProfile, useAllApps, useCellular)
         status = str(R.string.ui_starting_with_root)
         if (useCellular) {
             error = str(R.string.ui_root_cellular_unsupported)
-            active = false; mode = Mode.NONE
+            active = false
             app.stopService(Intent(app, LiveService::class.java))
             return
         }
@@ -181,7 +96,7 @@ object ShizukuMicController {
             val log = File(app.getExternalFilesDir(null), "virtual_mic/$tag.log")
             log.parentFile?.mkdirs()
             try {
-                check(checkRoot(force = true)) { str(R.string.ui_root_or_shizuku_required) }
+                check(checkRoot(force = true)) { str(R.string.ui_root_required) }
                 val token = "virtual-mic-${UUID.randomUUID()}"
                 rootToken = token
                 val apk = app.applicationInfo.sourceDir.replace("'", "'\\''")
@@ -207,7 +122,7 @@ object ShizukuMicController {
                     }
                 }
                 if (!ready.await(25, TimeUnit.SECONDS) || cancel.get()) {
-                    if (!cancel.get()) error = str(R.string.ui_could_not_start_3, str(R.string.ui_check_the_connection))
+                    if (!cancel.get()) error = str(R.string.ui_root_bridge_timeout)
                     return@thread
                 }
                 val intent = Intent().putExtra("virtual_mic_socket", token)
@@ -245,7 +160,7 @@ object ShizukuMicController {
                 if (!cancel.get() && converterStarted) VirtualMicSession.failureMessage?.let { error = it }
                 runCatching { log.writeText(shellLog + "\nAPP_STATUS: " + status) }
                 runCatching { app.stopService(Intent(app, LiveService::class.java)) }
-                rootProcess = null; rootReader = null; active = false; mode = Mode.NONE
+                rootProcess = null; rootReader = null; active = false
             }
         }
     }
@@ -261,7 +176,7 @@ object ShizukuMicController {
     fun stop() {
         userStopped.set(true)
         cancelled.set(true)
-        if (mode == Mode.ROOT) runCatching { rootProcess?.outputStream?.write(2); rootProcess?.outputStream?.flush() }
+        runCatching { rootProcess?.outputStream?.write(2); rootProcess?.outputStream?.flush() }
         if (!active) VirtualMicSession.stop()
     }
 

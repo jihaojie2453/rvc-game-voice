@@ -15,9 +15,13 @@
     <string name="ui_saved_separately_for_each_model">每个音色单独保存</string>
     <string name="ui_root_checking">正在检查 Root…</string>
     <string name="ui_root_granted">Root 已授权</string>
-    <string name="ui_root_or_shizuku_required">请给 Voice Studio 授予 Root 权限，或连接 Shizuku。</string>
+    <string name="ui_root_required">需要 Root 权限</string>
+    <string name="ui_root_required_detail">Voice Studio 还没加入 Root 管理器的白名单。请在 Root 管理器（SukiSU）里给本应用授予 Root，再点上面的状态标签重新检测。</string>
+    <string name="ui_root_status_tap_to_recheck">Root 状态。点按重新检测。</string>
+    <string name="ui_root_bridge_timeout">Root 桥接进程没有按时启动。请确认已授予 Root 后重试。</string>
     <string name="ui_starting_with_root">正在通过 Root 启动虚拟麦克风…</string>
-    <string name="ui_root_cellular_unsupported">Root 模式暂不支持蜂窝通话，请使用 Shizuku 进行通话。</string>
+    <string name="ui_root_cellular_unsupported">虚拟麦克风暂不支持蜂窝通话。</string>
+    <string name="ui_virtual_mic_root_no_time">虚拟麦克风 · 需要 Root · 无时间限制</string>
     <string name="ui_raise_or_lower_your_voice_semitones_octave">升高或降低音高 · 12 个半音 = 1 个八度</string>
     <string name="ui_lower">−24 更低</string>
     <string name="ui_original_3">0 原声</string>
@@ -72,22 +76,7 @@
     <string name="ui_connect_to_an_app_installed_in_the">连接到当前用户中已安装的应用。</string>
     <string name="ui_open_secure_folder_yourself_then_open_the">请先手动打开安全文件夹，再打开所选应用。</string>
     <string name="ui_checking_connection">正在检查连接</string>
-    <string name="ui_shizuku_connection_status_tap_to_open_shizuku">Shizuku 连接状态。点按打开 Shizuku。</string>
-    <string name="ui_shizuku_connected">Shizuku 已连接</string>
-    <string name="ui_shizuku_approval_needed">需要授权 Shizuku</string>
-    <string name="ui_connect_shizuku">连接 Shizuku</string>
     <string name="ui_check_connection">检查连接</string>
-    <string name="ui_allow_voice_studio_in_shizuku">请在 Shizuku 中允许音色工坊。</string>
-    <string name="ui_allow_voice_studio_in_shizuku_s_authorized">请在 Shizuku 的已授权应用里允许音色工坊。</string>
-    <string name="ui_connect_to_shizuku_first">请先连接 Shizuku</string>
-    <string name="ui_tap_the_connection_button_above_and_start">点按上方的连接按钮，并用无线调试启动 Shizuku。</string>
-    <string name="ui_the_start_button_will_request_shizuku_access">启动按钮会请求 Shizuku 权限。</string>
-    <string name="ui_start_shizuku_using_wireless_debugging">请用无线调试启动 Shizuku。</string>
-    <string name="ui_start_shizuku_using_wireless_debugging_2">请用无线调试启动 Shizuku。</string>
-    <string name="ui_preparing_the_microphone_with_shizuku">正在通过 Shizuku 准备麦克风…</string>
-    <string name="ui_shizuku_disconnected">Shizuku 已断开。</string>
-    <string name="ui_shizuku_service_connection_timed_out">Shizuku 服务连接超时。</string>
-    <string name="ui_could_not_connect_to_the_shizuku_service">无法连接 Shizuku 服务。</string>
     <string name="ui_virtual_microphone_is_off">虚拟麦克风已关闭。</string>
     <string name="ui_virtual_microphone_is_off_2">虚拟麦克风已关闭。</string>
     <string name="ui_virtual_microphone_is_off_apps_return_to">虚拟麦克风已关闭，应用会恢复使用原始麦克风。</string>
@@ -324,9 +313,8 @@
     <string name="ui_uses_npu_gpu_or_cpu_based_on">根据设备使用 NPU、GPU 或 CPU。加速器失败时会回退到 CPU。实时性能因设备而异。</string>
     <string name="ui_current_voice">当前音色 %1$s：%2$s</string>
     <string name="ui_web_calls_desktop_browser">网页通话 · 桌面浏览器</string>
-    <string name="ui_start_live_conversion_then_connect_your_converted">先启动实时变声，再把变声后的声音连接到网站。无需 Shizuku。</string>
+    <string name="ui_start_live_conversion_then_connect_your_converted">先启动实时变声，再把变声后的声音连接到网站。无需 Root。</string>
     <string name="ui_send_your_voice_to_other_apps">把声音发送到其他应用</string>
-    <string name="ui_virtual_mic_optional_shizuku_connection_no_time">虚拟麦克风 · 可选 Shizuku 连接 · 无时间限制</string>
     <string name="ui_open_virtual_mic">打开虚拟麦克风</string>
     <string name="ui_stop_the_current_recording_or_conversion_first">请先停止当前录音或转换。</string>
     <string name="ui_s">%1$.2f 秒</string>
@@ -416,6 +404,5 @@
     <string name="ui_join_a_call_on_the_site"> · 在网站上加入通话</string>
     <string name="ui_voice_disconnected_tap_connect_to_resume">声音已断开 · 点按“连接”恢复。</string>
     <string name="ui_record_and_transform_your_voice_on_your">在手机上录制并转换你的声音</string>
-    <string name="shizuku_setup_guide">Shizuku 设置指南</string>
-    <string name="usage_steps">1. 准备模型\n在设置中下载共享模型。用电脑端转换器转换 RVC v2、48 kHz、带 f0 的音色，然后导入 ZIP 或发送到平板。\n\n2. 文件转换与返音\n在“转换”页录音或导入音频。要实时试听，选择音色并打开“返音试听”，建议戴耳机。\n\n3. 游戏开黑（Root 或 Shizuku）\n给 Voice Studio 授予 Root 权限，或安装并启动 Shizuku。打开“虚拟麦克风”，选择游戏和音色，点开始。每个游戏会记住自己的音色。启动游戏并打开它的麦克风即可。\n\n4. 全部应用与安全文件夹\n“所有应用”模式会替换支持的输入，包括安全文件夹。单应用“其他分身”模式需要先在该分身中打开目标麦克风。蜂窝通话和蓝牙尚未验证。\n\n5. 停止\n在虚拟麦克风页面或通知中点停止。应用会恢复原始麦克风，不会结束通话。没有输入时会暂停采集和推理。</string>
+    <string name="usage_steps">1. 准备模型\n在设置中下载共享模型。用电脑端转换器转换 RVC v2、48 kHz、带 f0 的音色，然后导入 ZIP 或发送到平板。\n\n2. 文件转换与返音\n在“转换”页录音或导入音频。要实时试听，选择音色并打开“返音试听”，建议戴耳机。\n\n3. 游戏开黑（需要 Root）\n在 Root 管理器（SukiSU）里给 Voice Studio 授予 Root 权限。打开“虚拟麦克风”，选择游戏和音色，点开始。每个游戏会记住自己的音色。启动游戏并打开它的麦克风即可。\n\n4. 全部应用与安全文件夹\n“所有应用”模式会替换支持的输入，包括安全文件夹。单应用“其他分身”模式需要先在该分身中打开目标麦克风。蜂窝通话和蓝牙尚未验证。\n\n5. 停止\n在虚拟麦克风页面或通知中点停止。应用会恢复原始麦克风，不会结束通话。没有输入时会暂停采集和推理。</string>
 </resources>

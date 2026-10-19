@@ -294,8 +294,8 @@ object VirtualMicSession {
             reader?.join(2000)
             runCatching { raw?.finish() }; runCatching { processed?.finish() }
             engine?.close()
-            // The Shizuku controller owns its foreground lifetime and error reporting.
-            if (!ShizukuMicController.active) context.stopService(Intent(context,LiveService::class.java))
+            // The root controller owns its foreground lifetime and error reporting.
+            if (!RootMicController.active) context.stopService(Intent(context,LiveService::class.java))
             log("CLOSED")
             active = false
         } finally {

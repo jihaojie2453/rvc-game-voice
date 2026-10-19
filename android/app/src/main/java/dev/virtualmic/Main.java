@@ -28,7 +28,7 @@ public final class Main {
     public static void main(String[] args) {
         int result = 0;
         try {
-            // Private pipe from the Shizuku service: stop even if that parent is killed.
+            // Private pipe from the app that launched us: stop even if that parent is killed.
             if (java.util.Arrays.asList(args).contains("--watch-parent")) {
                 Thread parent = new Thread(() -> {
                     try { while (System.in.read() != -1) {} } catch (java.io.IOException ignored) {}

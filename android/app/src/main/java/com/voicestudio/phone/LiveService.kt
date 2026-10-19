@@ -46,8 +46,8 @@ class LiveService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == STOP) {
-            ShizukuMicController.stop()
-            if (!ShizukuMicController.active) VirtualMicSession.stop()
+            RootMicController.stop()
+            if (!RootMicController.active) VirtualMicSession.stop()
             LiveSession.stop(this)
             stopSelf()
             return START_NOT_STICKY
@@ -61,7 +61,7 @@ class LiveService : Service() {
     }
 
     private fun updateNotification(foreground: Boolean) {
-        val phase = ShizukuMicController.phase
+        val phase = RootMicController.phase
         val working = if (virtual) phase in setOf(MicPhase.PREPARING, MicPhase.BUFFERING, MicPhase.RUNNING)
             else LiveSession.running
         val now = SystemClock.elapsedRealtime()
@@ -73,34 +73,34 @@ class LiveService : Service() {
         } else if (wakeLock.isHeld) wakeLock.release()
 
         val title = if (!virtual) str(R.string.ui_live_conversion_running) else when (phase) {
-            MicPhase.WAITING -> if (ShizukuMicController.cellular) str(R.string.cellular_waiting) else str(R.string.ui_virtual_mic_waiting_for_input)
+            MicPhase.WAITING -> if (RootMicController.cellular) str(R.string.cellular_waiting) else str(R.string.ui_virtual_mic_waiting_for_input)
             MicPhase.RUNNING -> str(R.string.ui_virtual_mic_converting)
             MicPhase.BUFFERING -> str(R.string.ui_virtual_mic_buffering)
             MicPhase.STOPPING -> str(R.string.ui_virtual_mic_stopping)
             MicPhase.ERROR -> str(R.string.ui_virtual_mic_check_connection)
             else -> str(R.string.ui_virtual_mic_preparing)
         }
-        if (targetPackage != ShizukuMicController.targetPackage) {
-            targetPackage = ShizukuMicController.targetPackage
+        if (targetPackage != RootMicController.targetPackage) {
+            targetPackage = RootMicController.targetPackage
             targetLabel = runCatching { packageManager.getApplicationLabel(packageManager.getApplicationInfo(targetPackage, 0)).toString() }
                 .getOrDefault(str(R.string.ui_selected_app))
         }
-        val destination = if (ShizukuMicController.cellular) str(R.string.cellular_destination) else if (ShizukuMicController.allApps) str(R.string.ui_all_apps) else targetLabel +
-            if (ShizukuMicController.otherProfile) str(R.string.ui_other_profile) else ""
+        val destination = if (RootMicController.cellular) str(R.string.cellular_destination) else if (RootMicController.allApps) str(R.string.ui_all_apps) else targetLabel +
+            if (RootMicController.otherProfile) str(R.string.ui_other_profile) else ""
         val body = if (!virtual) str(R.string.ui_converting_and_playing_your_microphone_audio) else when (phase) {
-            MicPhase.WAITING -> if (ShizukuMicController.cellular) str(R.string.cellular_waiting_help) else str(R.string.ui_connects_automatically_when_an_app_uses_the)
+            MicPhase.WAITING -> if (RootMicController.cellular) str(R.string.cellular_waiting_help) else str(R.string.ui_connects_automatically_when_an_app_uses_the)
             MicPhase.BUFFERING -> str(R.string.ui_audio_will_resume_when_converted_sound_is)
             MicPhase.RUNNING -> str(R.string.ui_sending_converted_voice, destination)
             MicPhase.STOPPING -> str(R.string.ui_restoring_the_original_microphone)
             MicPhase.ERROR -> str(R.string.ui_tap_to_check_the_connection)
             else -> str(R.string.ui_loading_your_voice_model)
         }
-        val model = ShizukuMicController.modelName
+        val model = RootMicController.modelName
         val signature = "$title|$body|$destination|$model"
         if (!foreground && signature == lastContent) return
         lastContent = signature
         val open = PendingIntent.getActivity(this, if (virtual) 2 else 0,
-            Intent(this, if (virtual) ShizukuMicActivity::class.java else MainActivity::class.java)
+            Intent(this, if (virtual) VirtualMicScreenActivity::class.java else MainActivity::class.java)
                 .setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val stop = PendingIntent.getService(this, 1, Intent(this, LiveService::class.java).setAction(STOP), PendingIntent.FLAG_IMMUTABLE)
         val builder = Notification.Builder(this, CHANNEL)
@@ -122,8 +122,8 @@ class LiveService : Service() {
         handler.removeCallbacks(ticker)
         if (wakeLock.isHeld) wakeLock.release()
         stopForeground(STOP_FOREGROUND_REMOVE)
-        ShizukuMicController.stop()
-        if (!ShizukuMicController.active) VirtualMicSession.stop()
+        RootMicController.stop()
+        if (!RootMicController.active) VirtualMicSession.stop()
         super.onDestroy()
     }
 
