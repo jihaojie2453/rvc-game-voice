@@ -1,0 +1,60 @@
+# Tests and builds the Android APK on every push to main, on pull requests and by hand (Actions > build > Run
+# workflow). The APK here is signed with a throwaway debug key unless the repository has ANDROID_KEYSTORE_B64 and
+# ANDROID_KEYSTORE_PASSWORD; releases are published by hand with an APK signed by the project's key.
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  converter:
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install numeric test dependency
+        run: python -m pip install numpy==2.2.6
+      - name: Check converter workflow and GUI
+        working-directory: converter
+        run: python -m unittest -v test_workflow test_gui test_model_format test_npu_geometry
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Check translations and web audio bridge
+        run: |
+          python3 android/check_translations.py
+          node --test android/web-tests/bridge.test.cjs
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "VS_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+          fi
+      - name: Test and build
+        working-directory: android
+        env:
+          VS_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: ./gradlew --no-daemon testDebugUnitTest assembleRelease
+      - run: cp android/app/build/outputs/apk/release/app-release.apk VoiceStudio.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: VoiceStudio.apk
