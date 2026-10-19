@@ -17,6 +17,11 @@
     <string name="ui_could_not_open_the_microphone">"Could not open the microphone."</string>
     <string name="ui_live_conversion">"Live conversion"</string>
     <string name="ui_virtual_microphone_status_and_stop_control">"Virtual microphone status and stop control."</string>
+    <string name="ui_root_checking">"Checking Root…"</string>
+    <string name="ui_root_granted">"Root granted"</string>
+    <string name="ui_root_or_shizuku_required">"Grant Root to Voice Studio, or connect Shizuku."</string>
+    <string name="ui_starting_with_root">"Starting the virtual mic with Root…"</string>
+    <string name="ui_root_cellular_unsupported">"Root mode does not support cellular calls yet. Use Shizuku for calls."</string>
     <string name="ui_live_conversion_running">"Live conversion running"</string>
     <string name="ui_virtual_mic_waiting_for_input">"Virtual mic · Waiting for input"</string>
     <string name="ui_virtual_mic_converting">"Virtual mic · Converting"</string>
@@ -384,4 +389,32 @@
     <string name="ui_apply_restart">Apply and restart</string>
     <string name="ui_restart_after_stopping">Wait for the microphone to stop, then start it again.</string>
     <string name="ui_live_per_voice_help">Output gain and timing settings are saved separately for each voice and shared with its virtual mic settings.</string>
+    <string name="ui_monitor_title">Return audio</string>
+    <string name="ui_monitor_help">Listen to the converted voice inside the app without opening a game or joining a team. Headphones are recommended to avoid feedback.</string>
+    <string name="ui_monitor_switch">Return audio (real-time)</string>
+    <string name="ui_monitor_on">Return audio is active. Adjust the voice while listening.</string>
+    <string name="ui_monitor_off">Return audio is off.</string>
+    <string name="ui_monitor_loading">Loading model…</string>
+    <string name="ui_monitor_active">Return audio active · volume, pitch and texture apply live</string>
+    <string name="ui_monitor_live_only">Live conversion is running (return audio is off)</string>
+    <string name="ui_monitor_failed">Could not start return audio: %1$s</string>
+    <string name="ui_game_voice_title">Game voices</string>
+    <string name="ui_game_voice_help">Each game remembers its own voice. Choose the game in Virtual mic, then choose a voice; the binding is saved automatically.</string>
+    <string name="ui_manage_game_voices">Manage game voices</string>
+    <string name="ui_game_voice_unbound">Not bound</string>
+    <string name="ui_game_voice_no_games">No supported game installed. Open Virtual mic to choose any app.</string>
+    <string name="ui_game_voice_bound_auto_switch">This game is bound. The voice will be selected automatically next time.</string>
+    <string name="ui_game_voice_bind_hint">Choose a voice to bind it to this game.</string>
+    <string name="ui_model_failed_silent_title">Silent protection</string>
+    <string name="ui_model_failed_silent_hold">Model failed. Keeping the game microphone silent; the original voice is not restored. Tap Stop to restore.</string>
+    <string name="ui_model_failed_silent_detail">The model stopped or failed to load. To protect your game audio, the virtual mic is injecting silence instead of your original voice. Tap Stop virtual mic to return to the original microphone.</string>
+    <string name="ui_voice_now_active">Voice is active</string>
+    <string name="help_pitch">Raises or lowers the pitch. +12 = one octave. Keep 0 for a voice model that already matches.</string>
+    <string name="help_formant">Changes the vocal-tract size and perceived gender. Too high sounds thin; too low sounds muffled.</string>
+    <string name="help_gain">Final output volume. Too high causes clipping and harsh distortion.</string>
+    <string name="help_block">Audio converted per step. Shorter blocks lower latency but need more compute.</string>
+    <string name="help_context">Past audio the model sees with each step. More context can be steadier but uses more compute.</string>
+    <string name="help_crossfade">Overlap blended between steps. Too small can click; too large adds delay.</string>
+    <string name="help_cushion">Output buffer that hides uneven compute. More buffer means fewer dropouts but more delay.</string>
+    <string name="help_threshold">Inputs quieter than this are not converted. Too high cuts word beginnings; too low lets noise through.</string>
 </resources>

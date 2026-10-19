@@ -1,1 +1,3 @@
 *.bat text eol=crlf
+# Android/Linux side: a shell script with CRLF will not run on the device
+*.sh text eol=lf

@@ -19,4 +19,9 @@ class MicPhaseTest {
         assertEquals(MicPhase.ERROR, MicPhase.resolve(true,false,"disconnected","BRIDGE_RUNNING"))
         assertEquals(MicPhase.PREPARING, MicPhase.resolve(true,false,null,"BRIDGE_CONNECTED"))
     }
+    @Test fun failedModelReportsSilentHold() {
+        assertEquals(MicPhase.SILENT, MicPhase.resolve(true,false,null,"BRIDGE_SILENT_HOLD", true))
+        assertEquals(MicPhase.SILENT, MicPhase.resolve(true,false,null,"BRIDGE_STREAM state=RUNNING\nBRIDGE_SILENT_HOLD: converter lost"))
+        assertEquals(MicPhase.RUNNING, MicPhase.resolve(true,false,null,"BRIDGE_RUNNING", false))
+    }
 }

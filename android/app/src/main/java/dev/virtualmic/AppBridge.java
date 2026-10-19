@@ -38,15 +38,19 @@ final class AppBridge implements Closeable {
     private volatile IOException failure;
     private volatile boolean closed;
     private volatile boolean resetPending;
+    private volatile boolean converterLost;
+    private final boolean failClosed;
     private final MicRelay.Trace converted;
 
-    AppBridge(String name, int uid, String trace) throws IOException {
+    AppBridge(String name, int uid, String trace, boolean failClosed) throws IOException {
         token = name;
+        this.failClosed = failClosed;
         server = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"));
-        server.setSoTimeout(120000);
+        server.setSoTimeout(failClosed ? 0 : 120000);
         converted = trace == null ? null : new MicRelay.Trace(trace + ".injected.wav");
-        deadline.schedule(this::close, 120, TimeUnit.SECONDS);
-        log("BRIDGE_LISTENING port=" + server.getLocalPort() + " converter_uid=" + uid);
+        if (!failClosed) deadline.schedule(this::close, 120, TimeUnit.SECONDS);
+        log("BRIDGE_LISTENING port=" + server.getLocalPort() + " converter_uid=" + uid
+                + " fail_closed=" + failClosed);
     }
 
     void accept() throws IOException {
@@ -90,7 +94,15 @@ final class AppBridge implements Closeable {
                         received += n;
                     }
                 }
-            } catch (IOException error) { if (!closed) failure = error; }
+            } catch (IOException error) {
+                if (!closed) {
+                    if (failClosed) {
+                        converterLost = true;
+                        synchronized (this) { head = 0; queued = 0; }
+                        log("BRIDGE_CONVERTER_LOST: holding silence");
+                    } else failure = error;
+                }
+            }
         }, "converted-pcm");
         reader.setDaemon(true);
         reader.start();
@@ -161,11 +173,18 @@ final class AppBridge implements Closeable {
         boolean persistent = seconds == 0 && call == null, capturing = !persistent, targetActive = !persistent;
         long lastConverted = start, lastWritten = start, previousReceived = received;
         long nextCheck = 0, lastHeartbeat = 0, segmentStart = start, segmentWritten = 0, segmentCaptured = captured;
+        boolean lostHandled = false;
         if (capturing) { track.play(); log("BRIDGE_BUFFERING: waiting for converted audio"); }
         else log("BRIDGE_IDLE: waiting for an app microphone; no start deadline");
         try {
             while (!closed && System.nanoTime() < end) {
                 if (failure != null) throw failure;
+                if (converterLost && !lostHandled) {
+                    synchronized (this) { head = 0; queued = 0; }
+                    gate.reset(); pending = offset = 0; lastOutput = 0; fadingIn = true;
+                    lostHandled = true;
+                    log("BRIDGE_SILENT_HOLD: converter lost; injecting silence");
+                }
                 if (call != null && !call.tick()) break;
                 long stateNow = System.nanoTime();
                 if (call != null) {
@@ -291,7 +310,7 @@ final class AppBridge implements Closeable {
             if(captureToWrite.size()>0) log("CAPTURE_TO_INJECT_WRITE p50_ms="+captureToWrite.percentile(.50)
                     +" p95_ms="+captureToWrite.percentile(.95)
                     +" window=last_4096_samples scope=source_timestamps_and_SOLA_mapping_excludes_output_track_and_target_buffers");
-            if (received == 0 && call == null) throw new IOException("No converted PCM received");
+            if (received == 0 && call == null && !failClosed) throw new IOException("No converted PCM received");
         } catch (Exception e) {
             if (call != null) call.failed();
             throw e;

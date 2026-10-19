@@ -140,6 +140,7 @@ class MainActivity : Activity() {
         sharedLiveControls?.refresh()
         liveGainBar?.progress = livePrefs().getInt("live_gain_db", 12) + 12
         if (recorder == null) refreshRecordings()  // realtime recordings may have been saved from the notification
+        updateGameVoiceSummary()
         if (LiveSession.engine != null) { ui.removeCallbacks(liveTicker); ui.post(liveTicker) }  // back from the notification
     }
 
@@ -1016,6 +1017,12 @@ class MainActivity : Activity() {
     private var refreshingLiveProfile = false
     private var sharedLiveControls: LiveSettingsUi? = null
     private var liveGainBar: SeekBar? = null
+    private var liveMonitorSwitch: Switch? = null
+    private var liveMonitorStatus: TextView? = null
+    private var gameVoiceSummary: TextView? = null
+    private var refreshingLiveMonitor = false
+    @Volatile private var liveMonitor = false
+    private var pendingMonitor = false
 
     private fun card(parent: LinearLayout) = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
@@ -1026,6 +1033,30 @@ class MainActivity : Activity() {
     }
 
     private fun valueText() = TextView(this).apply { textSize = 13f; typeface = Typeface.MONOSPACE; setTextColor(getColor(R.color.accent_strong)) }
+
+    private fun parameterHelp(parent: LinearLayout, text: String) {
+        parent.addView(TextView(this).apply {
+            this.text = text; textSize = 11f; setTextColor(getColor(R.color.muted))
+            setPadding(0, dp(2), 0, 0); setLineSpacing(dp(2).toFloat(), 1f)
+        })
+    }
+
+    private fun setMonitorSwitch(on: Boolean) {
+        refreshingLiveMonitor = true
+        liveMonitorSwitch?.isChecked = on
+        refreshingLiveMonitor = false
+    }
+
+    private fun updateGameVoiceSummary() {
+        val view = gameVoiceSummary ?: return
+        val known = listOf("com.netease.wyclx", "com.tencent.tmgp.pubgmhd", "com.tencent.tmgp.pubg")
+        val lines = known.mapNotNull { pkg ->
+            val info = runCatching { packageManager.getApplicationInfo(pkg, 0) }.getOrNull() ?: return@mapNotNull null
+            val label = packageManager.getApplicationLabel(info).toString()
+            "$label：${GameVoiceMap.model(prefs, pkg) ?: str(R.string.ui_game_voice_unbound)}"
+        }
+        view.text = if (lines.isEmpty()) str(R.string.ui_game_voice_no_games) else lines.joinToString("\n")
+    }
 
     private fun switchRow(parent: LinearLayout, label: String, hint: String, key: String) {
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(12), 0, 0) }
@@ -1089,6 +1120,67 @@ class MainActivity : Activity() {
                 }
             }
         })
+        // In-app monitoring: the same live engine, without opening a game or joining a call.
+        val monitor = card(page)
+        page.removeView(monitor); page.addView(monitor, 2)
+        monitor.addView(TextView(this).apply {
+            text = str(R.string.ui_monitor_title); textSize = 17f
+            typeface = Typeface.create("sans-serif", Typeface.BOLD); setTextColor(getColor(R.color.text))
+        })
+        monitor.addView(TextView(this).apply {
+            text = str(R.string.ui_monitor_help); textSize = 12f
+            setTextColor(getColor(R.color.muted)); setPadding(0, dp(6), 0, dp(8))
+        })
+        val monitorRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+        }
+        monitorRow.addView(TextView(this).apply {
+            text = str(R.string.ui_monitor_switch); textSize = 14f
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        val monitorSwitch = Switch(this).apply {
+            isChecked = false
+            setOnCheckedChangeListener { _, on ->
+                if (refreshingLiveMonitor) return@setOnCheckedChangeListener
+                if (on) {
+                    if (livePreparing) return@setOnCheckedChangeListener
+                    if (LiveSession.engine == null) toggleLive(monitor = true) else {
+                        liveMonitor = true
+                        toast(str(R.string.ui_monitor_on))
+                    }
+                } else {
+                    liveMonitor = false
+                    if (LiveSession.engine != null) stopLive()
+                }
+            }
+        }
+        liveMonitorSwitch = monitorSwitch
+        monitorRow.addView(monitorSwitch)
+        monitor.addView(monitorRow)
+        liveMonitorStatus = TextView(this).apply {
+            text = str(R.string.ui_monitor_off); textSize = 12f
+            setTextColor(getColor(R.color.muted)); setPadding(0, dp(6), 0, 0)
+        }
+        monitor.addView(liveMonitorStatus)
+        val games = card(page)
+        page.removeView(games); page.addView(games, 3)
+        games.addView(TextView(this).apply {
+            text = str(R.string.ui_game_voice_title); textSize = 17f
+            typeface = Typeface.create("sans-serif", Typeface.BOLD); setTextColor(getColor(R.color.text))
+        })
+        games.addView(TextView(this).apply {
+            text = str(R.string.ui_game_voice_help); textSize = 12f
+            setTextColor(getColor(R.color.muted)); setPadding(0, dp(6), 0, dp(8))
+        })
+        gameVoiceSummary = TextView(this).apply {
+            textSize = 12f; setTextColor(getColor(R.color.text)); setLineSpacing(dp(3).toFloat(), 1f)
+        }
+        games.addView(gameVoiceSummary)
+        games.addView(Button(this, null, 0, R.style.SoftButton).apply {
+            text = str(R.string.ui_manage_game_voices)
+            layoutParams = LinearLayout.LayoutParams(-1, dp(46)).apply { topMargin = dp(10) }
+            setOnClickListener { startActivity(Intent(this@MainActivity, ShizukuMicActivity::class.java)) }
+        })
         // Output level, pitch and texture belong to the selected voice.
         val voice = card(page)
         voice.addView(TextView(this).apply { text = str(R.string.ui_voice_changes_apply_instantly); textSize = 13f; setTypeface(typeface, Typeface.BOLD) })
@@ -1101,6 +1193,7 @@ class MainActivity : Activity() {
         })
         liveGainBar = gain
         gain.progress = livePrefs().getInt("live_gain_db", 12) + 12
+        parameterHelp(voice, str(R.string.help_gain))
         val pitchValue = valueText()
         val pitch = sliderRow(voice, str(R.string.ui_pitch_relative_to_your_voice), pitchValue, "−24", "+24", 48)
         pitch.setOnSeekBarChangeListener(slider { p, done ->
@@ -1108,6 +1201,7 @@ class MainActivity : Activity() {
             if (done) { saveSetting("pitch", (p - 24).toDouble()); loadSliders() }
         })
         liveBars["pitch"] = pitch
+        parameterHelp(voice, str(R.string.help_pitch))
         val formantValue = valueText()
         val formant = sliderRow(voice, str(R.string.ui_formant_voice_texture), formantValue, "−2", "+2", 40)
         formant.setOnSeekBarChangeListener(slider { p, done ->
@@ -1115,6 +1209,7 @@ class MainActivity : Activity() {
             if (done) { saveSetting("formant", (p - 20) / 10.0); loadSliders() }
         })
         liveBars["formant"] = formant
+        parameterHelp(voice, str(R.string.help_formant))
         // the rest takes effect at the next start
         val more = card(page)
         val header = TextView(this).apply { textSize = 13f; setTypeface(typeface, Typeface.BOLD) }
@@ -1163,10 +1258,11 @@ class MainActivity : Activity() {
         liveBars["formant"]?.progress = ((num("formant") + 2) * 10).roundToInt()
     }
 
-    private fun toggleLive() {
+    private fun toggleLive(monitor: Boolean = false) {
         if (ShizukuMicController.active || VirtualMicSession.isActive) { toast(str(R.string.ui_turn_off_the_virtual_microphone_first)); return }
         if (LiveSession.engine != null) { stopLive(); return }
-        if (livePreparing) return
+        if (livePreparing) { if (monitor) setMonitorSwitch(false); return }
+        pendingMonitor = monitor
         val mic = android.Manifest.permission.RECORD_AUDIO
         if (checkSelfPermission(mic) != PackageManager.PERMISSION_GRANTED) {
             // the notification that keeps it running with the screen off needs its own permission (Android 13+)
@@ -1175,11 +1271,13 @@ class MainActivity : Activity() {
             requestPermissions(ask.toTypedArray(), LIVE_MIC)
             return
         }
-        val dir = currentModel() ?: run { toast(str(R.string.ui_select_a_voice_model_on_the_convert)); return }
-        if (!File(commonDir, "hubert.onnx").isFile || !File(commonDir, "rmvpe.onnx").isFile) { toast(str(R.string.ui_shared_models_hubert_and_rmvpe_are_required)); return }
-        if (recorder != null) { toast(str(R.string.ui_stop_recording_first)); return }
-        if (busy) { toast(str(R.string.ui_wait_for_conversion_to_finish)); return }
+        fun abort(): Boolean { if (monitor) setMonitorSwitch(false); return true }
+        val dir = currentModel() ?: run { toast(str(R.string.ui_select_a_voice_model_on_the_convert)); abort(); return }
+        if (!File(commonDir, "hubert.onnx").isFile || !File(commonDir, "rmvpe.onnx").isFile) { toast(str(R.string.ui_shared_models_hubert_and_rmvpe_are_required)); abort(); return }
+        if (recorder != null) { toast(str(R.string.ui_stop_recording_first)); abort(); return }
+        if (busy) { toast(str(R.string.ui_wait_for_conversion_to_finish)); abort(); return }
         player.stop()
+        liveMonitor = monitor
         var params = liveParams()
         val autoBlock = livePrefs().getBoolean("live_auto_block", false)
         val devices = liveDevices(dir)
@@ -1187,8 +1285,8 @@ class MainActivity : Activity() {
         val liveDec = if (decFile != "model.dec.onnx") decFile else devices.file
         val front = devices.front
         val threads = prefs.getInt("threads", 4)
-        val speaker = prefs.getBoolean("live_speaker", false)
-        val bypass = prefs.getBoolean("live_bypass", false)
+        val speaker = monitor || prefs.getBoolean("live_speaker", false)
+        val bypass = if (monitor) false else prefs.getBoolean("live_bypass", false)
         val settings = settingsOf(dir)
         livePreparing = true
         liveMessage = str(R.string.ui_preparing)
@@ -1226,9 +1324,11 @@ class MainActivity : Activity() {
                 e.start()
                 LiveSession.engine = e
                 liveMessage = null
+                if (monitor) ui.post { toast(str(R.string.ui_monitor_on)) }
             } catch (t: Throwable) {
                 android.util.Log.e("VoiceStudio", "live start failed", t)
                 liveMessage = str(R.string.ui_could_not_start, t.message)
+                if (monitor) { liveMonitor = false; ui.post { setMonitorSwitch(false) } }
                 LiveSession.stop(applicationContext)
             } finally {
                 livePreparing = false
@@ -1239,6 +1339,8 @@ class MainActivity : Activity() {
 
     private fun stopLive(failure: String? = null) {
         val e = LiveSession.engine ?: return
+        liveMonitor = false
+        setMonitorSwitch(false)
         lastLive = e.snapshot()
         LiveSession.engine = null  // the ticker stops; the threads end below
         liveMessage = failure ?: str(R.string.ui_stopping)
@@ -1348,6 +1450,15 @@ class MainActivity : Activity() {
             e != null -> str(R.string.ui_conversion_continues_with_the_screen_off_you)
             else -> str(R.string.ui_use_headphones_without_headphones_audio_plays_through)
         }
+        val monitoring = LiveSession.running && liveMonitor
+        liveMonitorStatus?.text = when {
+            livePreparing -> str(R.string.ui_monitor_loading)
+            monitoring -> str(R.string.ui_monitor_active)
+            LiveSession.running -> str(R.string.ui_monitor_live_only)
+            liveMessage != null && liveMonitor -> str(R.string.ui_monitor_failed, liveMessage ?: "")
+            else -> str(R.string.ui_monitor_off)
+        }
+        if (liveMonitorSwitch?.isChecked != monitoring) setMonitorSwitch(monitoring)
     }
 
     // ---------------------------------------------------------------- misc
@@ -1356,7 +1467,7 @@ class MainActivity : Activity() {
         val mic = permissions.indexOf(android.Manifest.permission.RECORD_AUDIO).let { results.getOrNull(it) } == PackageManager.PERMISSION_GRANTED
         if (code == MIC && mic) toggleRecording()
         else if (code == MIC) toast(str(R.string.ui_microphone_permission_is_required_to_record))
-        else if (code == LIVE_MIC && mic) toggleLive()
+        else if (code == LIVE_MIC && mic) toggleLive(pendingMonitor)
         else if (code == LIVE_MIC) toast(str(R.string.ui_microphone_permission_is_required_for_live_conversion))
     }
 

@@ -18,7 +18,7 @@ class LiveSettingsUi(private val context: Context, private val prefs: () -> Mode
     fun refresh() { refreshers.forEach { it() } }
 
     fun slider(parent: LinearLayout, label: String, min: Int, max: Int, minLabel: String, maxLabel: String,
-               read: () -> Int, write: (Int) -> Unit, format: (Int) -> String) {
+               read: () -> Int, write: (Int) -> Unit, format: (Int) -> String, help: String? = null) {
         val row = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
             setPadding(0, dp(12), 0, 0)
@@ -38,6 +38,10 @@ class LiveSettingsUi(private val context: Context, private val prefs: () -> Mode
             gravity = if (i == 0) Gravity.START else Gravity.END
         }, LinearLayout.LayoutParams(0, -2, 1f))
         parent.addView(scale)
+        if (!help.isNullOrBlank()) parent.addView(TextView(context).apply {
+            text = help; textSize = 11f; setTextColor(context.getColor(R.color.muted))
+            setPadding(0, dp(2), 0, 0); setLineSpacing(dp(2).toFloat(), 1f)
+        })
         val refresh = {
             val n = read().coerceIn(min, max)
             bar.progress = n - min; value.text = format(n)
@@ -75,24 +79,26 @@ class LiveSettingsUi(private val context: Context, private val prefs: () -> Mode
             text = str(R.string.live_auto_block_help); textSize = 11f; setTextColor(context.getColor(R.color.muted))
         })
         fun setting(key: String, label: Int, min: Int, max: Int, low: String, high: String,
-                    read: () -> Int, format: (Int) -> String) = slider(parent, str(label), min, max, low, high,
-            read, { prefs().putInt(key, it); refresh() }, format)
+                    read: () -> Int, format: (Int) -> String, help: String) = slider(parent, str(label), min, max, low, high,
+            read, { prefs().putInt(key, it); refresh() }, format, help)
         val seconds = { n: Int -> String.format(Locale.US, str(R.string.ui_s), n / 100.0) }
         setting("live_block", R.string.ui_block_audio_converted_per_step, 15, 50,
-            str(R.string.ui_faster), str(R.string.ui_more_headroom), { params().block }, seconds)
+            str(R.string.ui_faster), str(R.string.ui_more_headroom), { params().block }, seconds,
+            str(R.string.help_block))
         setting("live_context", R.string.ui_additional_context, 0, LiveParams.MAX_CONTEXT, "0", "3.00",
-            { params().context }, seconds)
+            { params().context }, seconds, str(R.string.help_context))
         parent.addView(TextView(context).apply {
             text = str(R.string.ui_additional_context_help); textSize = 11f; setTextColor(context.getColor(R.color.muted))
         })
-        setting("live_crossfade", R.string.ui_crossfade, 4, 12, "0.04", "0.12", { params().crossfade }, seconds)
+        setting("live_crossfade", R.string.ui_crossfade, 4, 12, "0.04", "0.12", { params().crossfade }, seconds,
+            str(R.string.help_crossfade))
         setting("live_cushion_cs", R.string.ui_output_buffer_reduce_dropouts, 2, 20, "0.02", "0.20",
-            { prefs().getInt("live_cushion_cs", 6) }, seconds)
+            { prefs().getInt("live_cushion_cs", 6) }, seconds, str(R.string.help_cushion))
         setting("live_threshold_db", R.string.ui_silence_threshold, -80, -30, "−80 dB", "−30 dB",
-            { params().thresholdDb.toInt() }, { "$it dB" })
+            { params().thresholdDb.toInt() }, { "$it dB" }, str(R.string.help_threshold))
     }
 
     fun outputGain(parent: LinearLayout) = slider(parent, str(R.string.ui_output_gain), -12, 24, "−12 dB", "+24 dB",
         { params().gainDb.toInt() }, { prefs().putInt("live_gain_db", it) },
-        { String.format(Locale.US, "%+d dB", it) })
+        { String.format(Locale.US, "%+d dB", it) }, str(R.string.help_gain))
 }

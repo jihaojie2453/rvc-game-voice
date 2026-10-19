@@ -16,8 +16,8 @@ android {
         applicationId = "com.voicestudio.phone"
         minSdk = 29
         targetSdk = 35
-        versionCode = 7
-        versionName = "0.4.3"
+        versionCode = 8
+        versionName = "0.4.4"
         ndk { abiFilters += listOf("arm64-v8a") }  // the S23+; keeps the APK small
     }
 
@@ -36,14 +36,9 @@ android {
             signingConfig = signingConfigs.getByName(if (releaseKeystore != null) "release" else "debug")
         }
     }
-    ndkVersion = "28.2.13676358"
-    externalNativeBuild {
-        // libvsdecoder: the decoder on the GPU through ncnn (src/main/cpp)
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
-        }
-    }
+    // libvsdecoder.so is shipped prebuilt in src/main/jniLibs. It is identical to the
+    // library built by src/main/cpp and avoids requiring a full NDK toolchain for
+    // routine UI/logic builds.
     packaging {
         // QNN's NPU programs (libQnnHtpV*Skel.so) are loaded by the DSP from disk, so native libraries
         // must be extracted at install instead of mapped from inside the APK

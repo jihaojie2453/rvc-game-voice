@@ -41,7 +41,7 @@ class VirtualMicUserService(private val context: Context) : IVirtualMicService.S
             val command = if (cellular) mutableListOf("/system/bin/app_process", "/", "dev.virtualmic.CellularMain", token)
                 else mutableListOf("/system/bin/app_process", "/", "dev.virtualmic.Main",
                 "--package", targetPackage, "--mic", "--seconds", seconds.toString(), "--bridge", token,
-                "--watch-parent")
+                "--watch-parent", "--fail-closed")
             if (otherProfile) command += "--other-profile"
             if (allApps) command += "--all-apps"
             val builder = ProcessBuilder(command).redirectErrorStream(true)

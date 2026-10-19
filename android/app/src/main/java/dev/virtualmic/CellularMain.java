@@ -40,7 +40,7 @@ public final class CellularMain {
             CellularAudio call = new CellularAudio(context);
             call.checkNeutral();
             int uid = context.getPackageManager().getApplicationInfo("com.voicestudio.phone", 0).uid;
-            bridge = new AppBridge(args[0], uid, null);
+            bridge = new AppBridge(args[0], uid, null, false);
             bridge.accept();
             while (true) {
                 System.out.println("[virtual-mic] BRIDGE_IDLE: waiting for a cellular call; microphone released");

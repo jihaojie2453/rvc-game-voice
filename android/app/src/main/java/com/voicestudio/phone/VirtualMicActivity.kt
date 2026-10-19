@@ -66,6 +66,7 @@ object VirtualMicSession {
     @Volatile var meter = Meter(); private set
     @Volatile var failureMessage: String? = null; private set
     @Volatile var running = false; private set
+    @Volatile var silentHold = false; private set
     @Volatile var status = str(R.string.ui_preparing); private set
     @Volatile private var socket: Socket? = null
     @Volatile private var active = false
@@ -74,6 +75,7 @@ object VirtualMicSession {
 
     fun stop() {
         running = false
+        silentHold = false
         runCatching { socket?.close() }
         wake.release()
     }
@@ -86,6 +88,7 @@ object VirtualMicSession {
         active = true
         meter = Meter()
         failureMessage = null
+        silentHold = false
         status = str(R.string.ui_preparing_the_rvc_model)
         thread(name = "virtual-mic-rvc") { runSession(context, intent, name) }
     }
@@ -107,6 +110,8 @@ object VirtualMicSession {
         var processed: WavWriter? = null
         var engine: Rvc? = null
         var normalEnd = false
+        var silentOutput: DataOutputStream? = null
+        var holdSilence = false
         val captureFailure = java.util.concurrent.atomic.AtomicReference<Throwable?>()
         try {
             val prefs = context.getSharedPreferences("phone", Context.MODE_PRIVATE)
@@ -164,6 +169,7 @@ object VirtualMicSession {
             client.soTimeout = 45000
             val input = DataInputStream(client.inputStream)
             val output = DataOutputStream(client.outputStream)
+            silentOutput = output
             output.writeInt(0x564d4932); output.writeUTF(name); output.writeInt(startDelayMs); output.flush()
             check(input.readInt() == 0x564d4932)
             log("CONNECTED directory=${dir.name} warmup_max_ms=$warmupMaxMs start_delay_ms=$startDelayMs")
@@ -262,9 +268,28 @@ object VirtualMicSession {
             log("SUMMARY steps=$steps mean_ms=${computeTotal/max(1,steps)} max_ms=$computeMax drops=$drops input_peak=$inputPeak output_peak=$outputPeak clips=${core.clips} quiet_steps=$quietSteps bridge_eof=$normalEnd")
             status=str(R.string.ui_virtual_mic_conversion_ended_processed_blocks_skips, steps, drops)
         } catch (e: Throwable) {
-            if (running || captureFailure.get() != null) { failureMessage=e.message ?: str(R.string.ui_an_error_occurred_during_conversion); status=str(R.string.ui_conversion_error, e.message); Log.e("VirtualMic","failed",e); log("FAILED ${e.javaClass.simpleName}: ${e.message}") }
+            if (running && e !is InterruptedException) {
+                failureMessage = e.message ?: str(R.string.ui_an_error_occurred_during_conversion)
+                silentHold = true
+                holdSilence = true
+                status = str(R.string.ui_model_failed_silent_hold)
+                Log.e("VirtualMic", "failed; holding silence", e)
+                log("FAIL_CLOSED ${e.javaClass.simpleName}: ${e.message}")
+            } else if (running || captureFailure.get() != null) {
+                failureMessage=e.message ?: str(R.string.ui_an_error_occurred_during_conversion); status=str(R.string.ui_conversion_error, e.message); Log.e("VirtualMic","failed",e); log("FAILED ${e.javaClass.simpleName}: ${e.message}")
+            }
             else status=str(R.string.ui_virtual_mic_conversion_ended)
-        } finally {
+        }
+        if (holdSilence) {
+            try {
+                while (running) {
+                    runCatching { silentOutput?.writeInt(0); silentOutput?.flush() }
+                    Thread.sleep(1000)
+                }
+            } catch (_: InterruptedException) {
+            }
+        }
+        try {
             stop()
             reader?.join(2000)
             runCatching { raw?.finish() }; runCatching { processed?.finish() }
@@ -273,6 +298,8 @@ object VirtualMicSession {
             if (!ShizukuMicController.active) context.stopService(Intent(context,LiveService::class.java))
             log("CLOSED")
             active = false
+        } finally {
+            silentHold = false
         }
     }
 }

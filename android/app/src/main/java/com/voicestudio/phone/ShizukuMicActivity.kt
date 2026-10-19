@@ -56,6 +56,7 @@ class ShizukuMicActivity : Activity() {
     private lateinit var targetChange: TextView
     private lateinit var targetIcon: ImageView
     private lateinit var voiceName: TextView
+    private lateinit var voiceHint: TextView
     private lateinit var profileHint: TextView
     private lateinit var profile: Switch
     private lateinit var primary: Button
@@ -67,6 +68,10 @@ class ShizukuMicActivity : Activity() {
     private lateinit var outputBar: ProgressBar
     private lateinit var inputValue: TextView
     private lateinit var outputValue: TextView
+    private var lastPhase: MicPhase? = null
+    private var lastModel = ""
+    private var rootReady = false
+    private var rootChecked = false
     private val permissionResult = Shizuku.OnRequestPermissionResultListener { code, grant ->
         if (code == 71) ui.post { if (grant == 0) begin() else showError(str(R.string.ui_allow_voice_studio_in_shizuku)) }
     }
@@ -101,13 +106,20 @@ class ShizukuMicActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Shizuku.addRequestPermissionResultListener(permissionResult)
+        thread(name = "root-check") {
+            val ok = ShizukuMicController.checkRoot()
+            ui.post { rootReady = ok; rootChecked = true; render() }
+        }
         window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
-        selectedPackage = if (ShizukuMicController.active) ShizukuMicController.targetPackage else prefs.getString("virtual_mic_target", "com.discord")!!
+        selectedPackage = if (ShizukuMicController.active) ShizukuMicController.targetPackage
+            else prefs.getString("virtual_mic_target", null) ?: defaultTarget()
         otherProfile = if (ShizukuMicController.active) ShizukuMicController.otherProfile else prefs.getBoolean("virtual_mic_other_profile", false)
         allApps = if (ShizukuMicController.active) ShizukuMicController.allApps else prefs.getBoolean("virtual_mic_all_apps", false)
         cellular = if (ShizukuMicController.active) ShizukuMicController.cellular else prefs.getBoolean("virtual_mic_cellular", false)
         models = File(getExternalFilesDir(null), "models").listFiles()?.filter { it.isDirectory && File(it, "model.enc.onnx").isFile }?.map { it.name }?.sorted() ?: emptyList()
-        selectedModel = if (ShizukuMicController.active) ShizukuMicController.modelName else prefs.getString("virtual_mic_model", prefs.getString("model", null)) ?: ""
+        selectedModel = if (ShizukuMicController.active) ShizukuMicController.modelName
+            else GameVoiceMap.model(prefs, selectedPackage)?.takeIf { it in models }
+                ?: prefs.getString("virtual_mic_model", prefs.getString("model", null)) ?: ""
         if (selectedModel !in models) selectedModel = models.firstOrNull() ?: ""
         val root = column().apply { setBackgroundColor(getColor(R.color.bg)); fitsSystemWindows = true }
         val scroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = false }
@@ -216,7 +228,9 @@ class ShizukuMicActivity : Activity() {
         voiceName = text("", 18f, ink, true)
         voiceRow.addView(voiceName, LinearLayout.LayoutParams(0, -2, 1f)); voiceRow.addView(text(str(R.string.ui_change), 13f, purple, true))
         voiceCard.addView(voiceRow)
-        voiceCard.space(5); voiceCard.addView(text(str(R.string.ui_uses_the_saved_pitch_and_formant_settings), 11f, muted))
+        voiceCard.space(5)
+        voiceHint = text(str(R.string.ui_uses_the_saved_pitch_and_formant_settings), 11f, muted)
+        voiceCard.addView(voiceHint)
         voiceCard.space(10)
         voiceCard.addView(button(str(R.string.ui_voice_live_settings)) { showVoiceSettings() }, LinearLayout.LayoutParams(-1, dp(46)))
         val diagnostic = text(str(R.string.ui_show_processing_details), 12f, muted).apply { setPadding(dp(4), dp(8), 0, dp(8)) }
@@ -252,6 +266,11 @@ class ShizukuMicActivity : Activity() {
         prefs.edit().putBoolean("virtual_mic_all_apps", allApps).apply()
         prefs.edit().putBoolean("virtual_mic_cellular", cellular).apply()
     }
+    private fun defaultTarget(): String {
+        val candidates = listOf("com.netease.wyclx", "com.tencent.tmgp.pubgmhd", "com.tencent.tmgp.pubg", "com.discord")
+        return candidates.firstOrNull { pkg -> runCatching { packageManager.getApplicationInfo(pkg, 0) }.isSuccess }
+            ?: "com.discord"
+    }
     private fun updateSelection() {
         targetCard.visibility = if (cellular) View.GONE else View.VISIBLE
         val app = targets.firstOrNull { it.packageName == selectedPackage }
@@ -261,6 +280,10 @@ class ShizukuMicActivity : Activity() {
         targetBadge.setTextColor(if (!allApps && !otherProfile && app?.verified == true) getColor(R.color.green) else muted)
         targetChange.visibility = if (allApps) View.GONE else View.VISIBLE
         voiceName.text = selectedModel.ifEmpty { str(R.string.ui_add_a_model_first) }
+        voiceHint.text = if (allApps || cellular) str(R.string.ui_uses_the_saved_pitch_and_formant_settings)
+            else if (GameVoiceMap.model(prefs, selectedPackage) == selectedModel)
+                str(R.string.ui_game_voice_bound_auto_switch)
+            else str(R.string.ui_game_voice_bind_hint)
         profile.visibility = if (allApps) View.GONE else View.VISIBLE
         profileHint.text = if (allApps) str(R.string.ui_send_converted_input_without_choosing_an_app)
             else if (otherProfile) str(R.string.ui_start_a_call_or_recording_in_that)
@@ -300,7 +323,9 @@ class ShizukuMicActivity : Activity() {
         list.adapter = adapter
         val dialog = AlertDialog.Builder(this).setTitle(str(R.string.ui_choose_destination_app)).setView(body).setNegativeButton(str(R.string.ui_close), null).create()
         list.setOnItemClickListener { _, _, position, _ ->
-            selectedPackage = visible[position].packageName; localError = null; saveSelection(); updateSelection(); dialog.dismiss()
+            selectedPackage = visible[position].packageName
+            GameVoiceMap.model(prefs, selectedPackage)?.takeIf { it in models }?.let { selectedModel = it }
+            localError = null; saveSelection(); updateSelection(); dialog.dismiss()
         }
         search.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
@@ -314,12 +339,29 @@ class ShizukuMicActivity : Activity() {
         dialog.show()
     }
     private fun chooseModel() {
-        if (ShizukuMicController.active) return
         if (models.isEmpty()) { showError(str(R.string.ui_add_a_model_on_the_convert_tab)); return }
         AlertDialog.Builder(this).setTitle(str(R.string.ui_choose_voice))
             .setSingleChoiceItems(models.toTypedArray(), models.indexOf(selectedModel)) { dialog, which ->
-                selectedModel = models[which]; localError = null; saveSelection(); updateSelection(); dialog.dismiss()
+                val changed = selectedModel != models[which]
+                selectedModel = models[which]
+                if (!allApps && !cellular) GameVoiceMap.bind(prefs, selectedPackage, selectedModel)
+                localError = null; saveSelection(); updateSelection(); dialog.dismiss()
+                if (changed && ShizukuMicController.active) restartVirtualMic()
             }.setNegativeButton(str(R.string.ui_close), null).show()
+    }
+
+    private fun restartVirtualMic() {
+        ShizukuMicController.stop()
+        val deadline = SystemClock.elapsedRealtime() + 15000
+        val restart = object : Runnable {
+            override fun run() {
+                if (isFinishing || isDestroyed) return
+                if (!ShizukuMicController.active && !VirtualMicSession.isActive) begin()
+                else if (SystemClock.elapsedRealtime() < deadline) ui.postDelayed(this, 200)
+                else showError(str(R.string.ui_restart_after_stopping))
+            }
+        }
+        ui.post(restart)
     }
     private fun showVoiceSettings() {
         val model = File(getExternalFilesDir(null), "models").listFiles()
@@ -329,7 +371,7 @@ class ShizukuMicActivity : Activity() {
         body.addView(text(str(R.string.ui_virtual_settings_help), 12f, muted))
         val controls = LiveSettingsUi(this, { ModelLivePreferences(prefs, model.name) }, virtualMic = true)
         fun readVoice(): JSONObject = if (file.isFile) JSONObject(file.readText()) else JSONObject()
-        fun voice(key: String, label: Int, min: Int, max: Int, scale: Double) {
+        fun voice(key: String, label: Int, min: Int, max: Int, scale: Double, help: String) {
             controls.slider(body, str(label), min, max, if (scale == 1.0) min.toString() else (min / scale).toString(),
                 if (scale == 1.0) "+$max" else (max / scale).toString(),
                 { (readVoice().optDouble(key, 0.0) * scale).roundToInt() },
@@ -342,11 +384,11 @@ class ShizukuMicActivity : Activity() {
                         catch (e: Throwable) { atomic.failWrite(stream); throw e }
                     } catch (e: Exception) { showError(e.message ?: str(R.string.ui_check_connection)) }
                 }, { value -> if (scale == 1.0) String.format(Locale.US, str(R.string.ui_semitones_2), value)
-                    else String.format(Locale.US, "%.1f", value / scale) })
+                    else String.format(Locale.US, "%.1f", value / scale) }, help)
         }
         try {
-            voice("pitch", R.string.ui_pitch_relative_to_your_voice, -24, 24, 1.0)
-            voice("formant", R.string.ui_formant_voice_texture, -20, 20, 10.0)
+            voice("pitch", R.string.ui_pitch_relative_to_your_voice, -24, 24, 1.0, str(R.string.help_pitch))
+            voice("formant", R.string.ui_formant_voice_texture, -20, 20, 10.0, str(R.string.help_formant))
         } catch (e: Exception) { showError(e.message ?: str(R.string.ui_check_connection)); return }
         controls.outputGain(body)
         controls.timing(body)
@@ -354,17 +396,7 @@ class ShizukuMicActivity : Activity() {
         val dialog = AlertDialog.Builder(this).setTitle(str(R.string.ui_voice_live_settings) + " · " + model.name)
             .setView(scroll).setNegativeButton(str(R.string.ui_close), null)
         if (ShizukuMicController.active) dialog.setPositiveButton(str(R.string.ui_apply_restart)) { _, _ ->
-            ShizukuMicController.stop()
-            val deadline = SystemClock.elapsedRealtime() + 15000
-            val restart = object : Runnable {
-                override fun run() {
-                    if (isFinishing || isDestroyed) return
-                    if (!ShizukuMicController.active && !VirtualMicSession.isActive) begin()
-                    else if (SystemClock.elapsedRealtime() < deadline) ui.postDelayed(this, 200)
-                    else showError(str(R.string.ui_restart_after_stopping))
-                }
-            }
-            ui.post(restart)
+            restartVirtualMic()
         }
         dialog.show()
     }
@@ -377,12 +409,32 @@ class ShizukuMicActivity : Activity() {
     private fun render() {
         val alive = Shizuku.pingBinder()
         val allowed = alive && runCatching { Shizuku.checkSelfPermission() == 0 }.getOrDefault(false)
-        connection.text = if (allowed) str(R.string.ui_shizuku_connected) else if (alive) str(R.string.ui_shizuku_approval_needed) else str(R.string.ui_connect_shizuku)
-        connection.setTextColor(if (allowed) getColor(R.color.green) else purple)
+        connection.text = when {
+            allowed -> str(R.string.ui_shizuku_connected)
+            alive -> str(R.string.ui_shizuku_approval_needed)
+            rootReady -> str(R.string.ui_root_granted)
+            rootChecked -> str(R.string.ui_root_or_shizuku_required)
+            else -> str(R.string.ui_root_checking)
+        }
+        connection.setTextColor(if (allowed || rootReady) getColor(R.color.green) else purple)
         val active = ShizukuMicController.active
         val phase = ShizukuMicController.phase
         val stream = phase == MicPhase.RUNNING
         val ready = phase == MicPhase.WAITING
+        if (phase != lastPhase) {
+            when (phase) {
+                MicPhase.RUNNING -> if (lastPhase == MicPhase.PREPARING || lastPhase == MicPhase.BUFFERING)
+                    Toast.makeText(this, str(R.string.ui_voice_now_active), Toast.LENGTH_SHORT).show()
+                MicPhase.SILENT -> Toast.makeText(this, str(R.string.ui_model_failed_silent_hold), Toast.LENGTH_LONG).show()
+                else -> {}
+            }
+            lastPhase = phase
+        }
+        val shownModel = selectedModel.ifEmpty { ShizukuMicController.modelName }
+        if (shownModel != lastModel) {
+            lastModel = shownModel
+            if (shownModel.isNotEmpty()) voiceName.text = shownModel
+        }
         if (SystemClock.elapsedRealtime() >= nextNotificationCheck) {
             val manager = getSystemService(android.app.NotificationManager::class.java)
             val enabled = manager.areNotificationsEnabled() && manager.getNotificationChannel(LiveService.CHANNEL)?.importance != android.app.NotificationManager.IMPORTANCE_NONE
@@ -392,6 +444,7 @@ class ShizukuMicActivity : Activity() {
         val failure = localError ?: ShizukuMicController.error
         headline.text = when {
             failure != null -> str(R.string.ui_check_connection)
+            phase == MicPhase.SILENT -> str(R.string.ui_model_failed_silent_title)
             phase == MicPhase.STOPPING -> str(R.string.ui_stopping_the_microphone)
             phase == MicPhase.BUFFERING -> str(R.string.ui_preparing_audio)
             stream -> str(R.string.ui_sending_your_voice)
@@ -402,6 +455,7 @@ class ShizukuMicActivity : Activity() {
         }
         detail.text = when {
             failure != null -> failure.substringAfter("Microphone bridge did not start: ").takeLast(350)
+            phase == MicPhase.SILENT -> str(R.string.ui_model_failed_silent_detail)
             phase == MicPhase.STOPPING -> str(R.string.ui_restoring_the_original_microphone_2)
             phase == MicPhase.BUFFERING -> str(R.string.ui_audio_resumes_when_converted_sound_is_ready)
             stream -> if (cellular) str(R.string.cellular_running) else if (allApps) str(R.string.ui_sending_converted_input_to_apps_using_the) else str(R.string.ui_sending_converted_input_to, targetName.text, if (otherProfile) str(R.string.ui_other_profile) else "")
@@ -431,8 +485,12 @@ class ShizukuMicActivity : Activity() {
     private fun begin(skipNotificationPermission: Boolean = false) {
         if (ShizukuMicController.active || VirtualMicSession.isActive) return
         localError = null
-        if (!Shizuku.pingBinder()) { showError(str(R.string.ui_start_shizuku_using_wireless_debugging)); return }
-        if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
+        val shizuku = Shizuku.pingBinder()
+        if (!shizuku && !rootReady) {
+            showError(str(if (rootChecked) R.string.ui_root_or_shizuku_required else R.string.ui_root_checking))
+            return
+        }
+        if (shizuku && !rootReady && Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
             if (Shizuku.shouldShowRequestPermissionRationale()) showError(str(R.string.ui_allow_voice_studio_in_shizuku_s_authorized))
             else Shizuku.requestPermission(71)
             return

@@ -197,7 +197,7 @@ public final class Main {
                     session.mic = new MicRelay(context, session.manager, targetUid, options.micSource, options.trace);
                     if (options.bridge != null) {
                         if (converterUid == targetUid) throw new IllegalArgumentException("Converter cannot be the target");
-                        session.bridge = new AppBridge(options.bridge, converterUid, options.trace);
+                        session.bridge = new AppBridge(options.bridge, converterUid, options.trace, options.failClosed);
                         stage = "wait-converter";
                         session.bridge.accept();
                     }
@@ -321,6 +321,7 @@ public final class Main {
         String bridgePackage = "com.voicestudio.phone";
         boolean otherProfile;
         boolean allApps;
+        boolean failClosed;
 
         static Options parse(String[] args) {
             Options options = new Options();
@@ -330,6 +331,7 @@ public final class Main {
                 if ("--watch-parent".equals(arg)) continue;
                 if ("--other-profile".equals(arg)) { options.otherProfile = true; continue; }
                 if ("--all-apps".equals(arg)) { options.allApps = true; options.probe = false; continue; }
+                if ("--fail-closed".equals(arg)) { options.failClosed = true; continue; }
                 if ("--mic".equals(arg)) { options.mic = true; continue; }
                 if (i + 1 >= args.length) throw new IllegalArgumentException("Missing value: " + arg);
                 String value = args[++i];
