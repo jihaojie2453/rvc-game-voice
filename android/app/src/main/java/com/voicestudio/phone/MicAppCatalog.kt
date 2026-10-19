@@ -14,7 +14,7 @@ object MicAppCatalog {
         val pm = context.packageManager
         val launchable = pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
         return launchable.map { it.activityInfo.applicationInfo }.distinctBy { it.packageName }
-            .filter { it.packageName != context.packageName && it.packageName != "moe.shizuku.privileged.api" && it.uid % 100000 >= 10000 }
+            .filter { it.packageName != context.packageName && it.uid % 100000 >= 10000 }
             .map { app ->
                 val permissions = runCatching { pm.getPackageInfo(app.packageName, PackageManager.GET_PERMISSIONS).requestedPermissions }.getOrNull()
                 MicTarget(app.packageName, app.loadLabel(pm).toString(), permissions?.contains(Manifest.permission.RECORD_AUDIO) == true)

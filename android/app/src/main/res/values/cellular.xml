@@ -3,7 +3,7 @@
     <string name="cellular_title">Phone calls · Experimental</string>
     <string name="cellular_destination">Phone call</string>
     <string name="cellular_open_phone">Open Phone</string>
-    <string name="cellular_help">Samsung S23+ (SM-S916N) only. Requires Shizuku, without root. Turn on virtual mic first, then make or answer a call using the earpiece. Errors or audio route changes keep the original voice blocked and end the call. Pressing Stop keeps the call connected and restores your original voice. Blocking is not guaranteed during the brief interval before a connection is detected.</string>
+    <string name="cellular_help">Not available yet. Phone-call replacement needs a VOICE_COMMUNICATION route that the root bridge does not provide, so the switch is hidden.</string>
     <string name="cellular_waiting">Waiting for a phone call</string>
     <string name="cellular_waiting_help">Make or answer a phone call using the earpiece. Conversion starts automatically when connected. The microphone is released while waiting.</string>
     <string name="cellular_ready">Choose your voice and turn on virtual mic, then make or answer a phone call.</string>

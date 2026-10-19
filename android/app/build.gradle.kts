@@ -16,8 +16,8 @@ android {
         applicationId = "com.voicestudio.phone"
         minSdk = 29
         targetSdk = 35
-        versionCode = 8
-        versionName = "0.4.4"
+        versionCode = 9
+        versionName = "0.4.5"
         ndk { abiFilters += listOf("arm64-v8a") }  // the S23+; keeps the APK small
     }
 
@@ -56,8 +56,6 @@ kotlin {
 
 dependencies {
     implementation("androidx.webkit:webkit:1.14.0")
-    implementation("dev.rikka.shizuku:api:13.1.5")
-    implementation("dev.rikka.shizuku:provider:13.1.5")
     implementation("com.microsoft.onnxruntime:onnxruntime-android-qnn:1.22.0")
     testImplementation("junit:junit:4.13.2")
 }

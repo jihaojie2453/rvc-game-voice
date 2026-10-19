@@ -224,7 +224,7 @@ class MainActivity : Activity() {
 
     private fun toggleRecording() {
         val r = recorder
-        if (r == null && (ShizukuMicController.active || VirtualMicSession.isActive)) { toast(str(R.string.ui_turn_off_the_virtual_microphone_first)); return }
+        if (r == null && (RootMicController.active || VirtualMicSession.isActive)) { toast(str(R.string.ui_turn_off_the_virtual_microphone_first)); return }
         if (r == null && LiveSession.running) { toast(str(R.string.ui_stop_live_conversion_before_recording)); return }
         if (r == null) {
             if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
@@ -593,7 +593,7 @@ class MainActivity : Activity() {
     }
 
     private fun runConversion(done: ((FloatArray, Double, Double) -> Unit)? = null) {
-        if (ShizukuMicController.active || VirtualMicSession.isActive) { toast(str(R.string.ui_turn_off_the_virtual_microphone_first)); return }
+        if (RootMicController.active || VirtualMicSession.isActive) { toast(str(R.string.ui_turn_off_the_virtual_microphone_first)); return }
         val x = input ?: return
         val dir = currentModel() ?: return
         val settings = settingsOf(dir)
@@ -1102,7 +1102,7 @@ class MainActivity : Activity() {
             setTextColor(getColor(R.color.text))
         })
         virtualCard.addView(TextView(this).apply {
-            text = str(R.string.ui_virtual_mic_optional_shizuku_connection_no_time); textSize = 12f
+            text = str(R.string.ui_virtual_mic_root_no_time); textSize = 12f
             setTextColor(getColor(R.color.muted)); setPadding(0, dp(6), 0, dp(12))
         })
         virtualCard.addView(Button(this, null, 0, R.style.SoftButton).apply {
@@ -1116,7 +1116,7 @@ class MainActivity : Activity() {
                 } else {
                     engine?.close(); engine = null; engineKey = ""
                     LiveSession.release()
-                    startActivity(Intent(this@MainActivity, ShizukuMicActivity::class.java))
+                    startActivity(Intent(this@MainActivity, VirtualMicScreenActivity::class.java))
                 }
             }
         })
@@ -1179,7 +1179,7 @@ class MainActivity : Activity() {
         games.addView(Button(this, null, 0, R.style.SoftButton).apply {
             text = str(R.string.ui_manage_game_voices)
             layoutParams = LinearLayout.LayoutParams(-1, dp(46)).apply { topMargin = dp(10) }
-            setOnClickListener { startActivity(Intent(this@MainActivity, ShizukuMicActivity::class.java)) }
+            setOnClickListener { startActivity(Intent(this@MainActivity, VirtualMicScreenActivity::class.java)) }
         })
         // Output level, pitch and texture belong to the selected voice.
         val voice = card(page)
@@ -1259,7 +1259,7 @@ class MainActivity : Activity() {
     }
 
     private fun toggleLive(monitor: Boolean = false) {
-        if (ShizukuMicController.active || VirtualMicSession.isActive) { toast(str(R.string.ui_turn_off_the_virtual_microphone_first)); return }
+        if (RootMicController.active || VirtualMicSession.isActive) { toast(str(R.string.ui_turn_off_the_virtual_microphone_first)); return }
         if (LiveSession.engine != null) { stopLive(); return }
         if (livePreparing) { if (monitor) setMonitorSwitch(false); return }
         pendingMonitor = monitor
