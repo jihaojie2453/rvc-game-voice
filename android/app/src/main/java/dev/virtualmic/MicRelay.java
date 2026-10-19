@@ -10,6 +10,7 @@ import android.media.AudioRecordingConfiguration;
 import android.media.AudioTimestamp;
 import android.media.AudioTrack;
 import android.media.MediaRecorder;
+import android.os.Build;
 import android.os.Process;
 import java.io.Closeable;
 import java.io.IOException;
@@ -25,11 +26,23 @@ final class MicRelay implements Closeable {
     private final Trace trace;
     private final AudioManager manager;
     private final int targetUid;
+    private final boolean bluetoothSco;
     private boolean closed;
 
     MicRelay(Context context, AudioManager manager, int targetUid, String sourceName, String tracePath) throws Exception {
+        this(context, manager, targetUid, sourceName, tracePath, false);
+    }
+
+    /**
+     * [bluetooth] replaces the built-in microphone with the headset's SCO microphone. The headset mic sits close
+     * to the mouth, but SCO takes the Bluetooth link away from A2DP, so the headset (and anything else playing)
+     * drops to narrowband call audio while this is on.
+     */
+    MicRelay(Context context, AudioManager manager, int targetUid, String sourceName, String tracePath,
+             boolean bluetooth) throws Exception {
         this.manager = manager;
         this.targetUid = targetUid;
+        this.bluetoothSco = bluetooth;
         if (context.checkSelfPermission("android.permission.RECORD_AUDIO")
                 != PackageManager.PERMISSION_GRANTED) {
             throw new SecurityException("Shell RECORD_AUDIO permission denied");
@@ -37,8 +50,24 @@ final class MicRelay implements Closeable {
         int minimum = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO,
                 AudioFormat.ENCODING_PCM_16BIT);
         if (minimum <= 0) throw new IllegalStateException("No supported microphone buffer size");
+        AudioDeviceInfo headsetMic = null;
+        if (bluetooth) {
+            if (Build.VERSION.SDK_INT < 31) throw new IllegalStateException("Bluetooth microphone needs Android 12+");
+            for (AudioDeviceInfo device : manager.getDevices(AudioManager.GET_DEVICES_INPUTS)) {
+                if (device.getType() == AudioDeviceInfo.TYPE_BLUETOOTH_SCO) { headsetMic = device; break; }
+            }
+            if (headsetMic == null) {
+                throw new IllegalStateException("No Bluetooth microphone: connect the headset with its call audio profile");
+            }
+            manager.setMode(AudioManager.MODE_IN_COMMUNICATION);
+            if (!manager.setCommunicationDevice(headsetMic)) {
+                manager.setMode(AudioManager.MODE_NORMAL);
+                throw new IllegalStateException("Could not switch the Bluetooth headset to its microphone");
+            }
+        }
         int audioSource = MediaRecorder.AudioSource.MIC;
-        if ("voice-communication".equals(sourceName)) audioSource = MediaRecorder.AudioSource.VOICE_COMMUNICATION;
+        if (bluetooth) audioSource = MediaRecorder.AudioSource.VOICE_COMMUNICATION;
+        else if ("voice-communication".equals(sourceName)) audioSource = MediaRecorder.AudioSource.VOICE_COMMUNICATION;
         if ("remote-submix".equals(sourceName)) {
             if (context.checkSelfPermission("android.permission.CAPTURE_AUDIO_OUTPUT")
                     != PackageManager.PERMISSION_GRANTED) {
@@ -58,16 +87,20 @@ final class MicRelay implements Closeable {
             if (record.getState() != AudioRecord.STATE_INITIALIZED) {
                 throw new IllegalStateException("Physical AudioRecord not initialized");
             }
-            AudioDeviceInfo builtIn = null;
-            for (AudioDeviceInfo device : manager.getDevices(AudioManager.GET_DEVICES_INPUTS)) {
-                if (device.getType() == AudioDeviceInfo.TYPE_BUILTIN_MIC) { builtIn = device; break; }
+            AudioDeviceInfo builtIn = headsetMic;
+            if (builtIn == null) {
+                for (AudioDeviceInfo device : manager.getDevices(AudioManager.GET_DEVICES_INPUTS)) {
+                    if (device.getType() == AudioDeviceInfo.TYPE_BUILTIN_MIC) { builtIn = device; break; }
+                }
             }
             if (builtIn == null || !record.setPreferredDevice(builtIn)) {
-                throw new IllegalStateException("Could not select built-in microphone");
+                throw new IllegalStateException(bluetoothSco
+                        ? "Could not select the Bluetooth microphone" : "Could not select built-in microphone");
             }
             if (tracePath != null) openedTrace = new Trace(tracePath);
             trace = openedTrace;
-            log("MIC_CONFIG source=" + sourceName + " preferred_device=" + builtIn.getId()
+            log("MIC_CONFIG source=" + sourceName + " bluetooth=" + bluetoothSco
+                    + " preferred_device=" + builtIn.getId() + " type=" + builtIn.getType()
                     + " record_buffer_frames=" + record.getBufferSizeInFrames()
                     + " buffer_capacity_ms=" + record.getBufferSizeInFrames() * 1000.0 / RATE);
         } catch (Exception error) {
@@ -218,6 +251,11 @@ final class MicRelay implements Closeable {
         closed = true;
         try { record.stop(); } catch (IllegalStateException ignored) {}
         record.release();
+        if (bluetoothSco) {
+            // hand the Bluetooth link back to A2DP as soon as the microphone is no longer needed
+            try { manager.clearCommunicationDevice(); } catch (Throwable ignored) {}
+            try { manager.setMode(AudioManager.MODE_NORMAL); } catch (Throwable ignored) {}
+        }
         if (trace != null) {
             try { trace.close(); } catch (IOException error) { log("TRACE_CLOSE_FAILED " + error); }
         }

@@ -43,6 +43,7 @@ class VirtualMicScreenActivity : Activity() {
     private var cellular = false
     private lateinit var cellularSwitch: Switch
     private lateinit var allAppsSwitch: Switch
+    private lateinit var micSwitch: Switch
     private var localError: String? = null
     private lateinit var connection: TextView
     private lateinit var notificationHint: TextView
@@ -222,6 +223,15 @@ class VirtualMicScreenActivity : Activity() {
         }
         targetCard.addView(profile)
         profileHint = text("", 11f, muted); targetCard.addView(profileHint)
+        targetCard.space(10)
+        micSwitch = Switch(this).apply {
+            text = str(R.string.ui_use_bluetooth_mic); textSize = 13f; setTextColor(ink)
+            typeface = Typeface.create("sans-serif", Typeface.NORMAL)
+            isChecked = prefs.getBoolean("mic_bluetooth", false)
+            setOnCheckedChangeListener { _, on -> prefs.edit().putBoolean("mic_bluetooth", on).apply() }
+        }
+        targetCard.addView(micSwitch)
+        targetCard.addView(text(str(R.string.help_bluetooth_mic), 11f, muted))
         voiceCard = card(content)
         voiceCard.addView(text(str(R.string.ui_voice_model), 11f, muted, true)); voiceCard.space(8)
         val voiceRow = row().apply { setOnClickListener { chooseModel() }; contentDescription = str(R.string.ui_choose_voice) }
@@ -468,6 +478,7 @@ class VirtualMicScreenActivity : Activity() {
         primary.alpha = if (primary.isEnabled) 1f else .45f
         profile.isEnabled = !active; targetCard.alpha = if (active) .75f else 1f; voiceCard.alpha = 1f
         allAppsSwitch.isEnabled = !active
+        micSwitch.isEnabled = !active
         cellularSwitch.isEnabled = !active
         val meter = if (stream) VirtualMicSession.meter else VirtualMicSession.Meter()
         fun showLevel(value: Float, bar: ProgressBar, label: TextView) {
@@ -477,6 +488,8 @@ class VirtualMicScreenActivity : Activity() {
         }
         showLevel(meter.input, inputBar, inputValue); showLevel(meter.output, outputBar, outputValue)
         metrics.text = str(R.string.ui_processing_ms_ms_block_skipped_inputs_capture, meter.computeMs.toInt(), meter.drops)
+        val bluetoothMic = prefs.getBoolean("mic_bluetooth", false)
+        if (micSwitch.isChecked != bluetoothMic) micSwitch.isChecked = bluetoothMic
     }
     private fun begin(skipNotificationPermission: Boolean = false) {
         if (RootMicController.active || VirtualMicSession.isActive) return
