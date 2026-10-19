@@ -99,15 +99,6 @@
     <string name="ui_model_failed_silent_detail">模型停止或加载失败。为了保护游戏音频，虚拟麦克风正在注入静音而不是你的原声。点“停止虚拟麦克风”可恢复原始麦克风。</string>
     <string name="ui_game_voice_bound_auto_switch">此游戏已绑定该音色，下次选择此游戏会自动切换。</string>
     <string name="ui_game_voice_bind_hint">为这个游戏选择一个音色后会记住绑定。</string>
-    <string name="ui_monitor_title">返音试听</string>
-    <string name="ui_monitor_help">不用打开游戏或组队，在 App 内实时听变声效果。建议戴耳机，避免扬声器声音被麦克风再次拾取。</string>
-    <string name="ui_monitor_switch">返音试听（实时）</string>
-    <string name="ui_monitor_on">返音试听已开启，可以边听边调参数。</string>
-    <string name="ui_monitor_off">返音试听未开启。</string>
-    <string name="ui_monitor_loading">模型加载中…</string>
-    <string name="ui_monitor_active">返音试听已生效 · 音量、音高、音色立即生效</string>
-    <string name="ui_monitor_live_only">实时转换已开启（返音试听关闭）</string>
-    <string name="ui_monitor_failed">返音启动失败：%1$s</string>
     <string name="ui_game_voice_title">游戏音色</string>
     <string name="ui_game_voice_help">每个游戏独立记住自己的音色。在虚拟麦克风里选择游戏和音色，绑定会自动保存。</string>
     <string name="ui_manage_game_voices">管理游戏音色</string>
@@ -118,6 +109,9 @@
     <string name="ui_converting_and_playing_your_microphone_audio">正在转换并播放麦克风音频</string>
     <string name="ui_voice_changes_apply_instantly">音色 · 参数立即生效</string>
     <string name="ui_output_gain">输出音量</string>
+    <string name="ui_input_gain">输入增益</string>
+    <string name="ui_use_bluetooth_mic">使用蓝牙耳机麦克风</string>
+    <string name="help_bluetooth_mic">用耳机上的麦克风，离嘴更近、电平更稳。代价是蓝牙会从 A2DP 切到通话通道，游戏声音会变成窄带、延迟略增。下次启动虚拟麦克风时生效。</string>
     <string name="ui_pitch_relative_to_your_voice">音高（相对你的声音）</string>
     <string name="ui_formant_voice_texture">共振峰（声音质感）</string>
     <string name="ui_advanced_settings_apply_on_next_start">▾  高级设置 · 下次启动生效</string>
@@ -171,6 +165,7 @@
     <string name="help_pitch">升高或降低音高。+12 表示升高一个八度。模型本身已经匹配时建议保持 0。</string>
     <string name="help_formant">调整声道大小和性别感。太高会变薄，太低会发闷、失真。</string>
     <string name="help_gain">变声后的最终音量。过高会产生削波和刺耳失真。</string>
+    <string name="help_input_gain">在转换前抬高麦克风电平。平板麦克风离嘴远，又没有自动增益，轻的字会掉到静音阈值以下被切掉。改动从下次启动实时变声起生效。</string>
     <string name="help_block">每次转换的音频长度。越短延迟越低，但更吃性能。</string>
     <string name="help_context">模型每次分析时参考的历史音频。越长可能越稳定，但更吃性能。</string>
     <string name="help_crossfade">相邻音频块的平滑重叠。太小会有咔哒声，太大增加延迟。</string>

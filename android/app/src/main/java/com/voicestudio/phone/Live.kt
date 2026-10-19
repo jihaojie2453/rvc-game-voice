@@ -12,14 +12,20 @@ import kotlin.math.tanh
 /** Realtime settings, read from the selected model profile. Frames are 10 ms. The iPhone's working values: block 18-20, context 100-131,
  *  crossfade 8, cushion 0.06-0.08 s. */
 object LivePreferences {
-    /** Shared defaults use the virtual microphone's tested 270 ms blocks. Saved values are preserved. */
-    fun read(virtualMic: Boolean = false, getInt: (String, Int) -> Int): LiveParams {
+    /** Shared defaults use the virtual microphone's tested 270 ms blocks. Saved values are preserved.
+     *  [bluetooth] selects the headset-microphone profile: the same voice needs far less input gain and a
+     *  higher gate when the headset sits next to the mouth instead of a tablet microphone across the desk. */
+    fun read(virtualMic: Boolean = false, getInt: (String, Int) -> Int): LiveParams =
+        readWithMic(virtualMic, getInt, bluetooth = false)
+
+    fun readWithMic(virtualMic: Boolean, getInt: (String, Int) -> Int, bluetooth: Boolean): LiveParams {
         val block = getInt("live_block", 27).coerceIn(15, 50)
         val fade = getInt("live_crossfade", 8).coerceIn(4, 12)
+        val mic = if (bluetooth) "_bt" else ""
         return LiveParams(block = block,
             context = getInt("live_context", LiveParams.defaultContext(block, fade)).coerceIn(0, LiveParams.MAX_CONTEXT),
             crossfade = fade, cushion = getInt("live_cushion_cs", 6).coerceIn(2, 20) / 100.0,
-            thresholdDb = getInt("live_threshold_db", -60).coerceIn(-80, -30).toDouble(),
+            thresholdDb = getInt("live_threshold_db$mic", if (bluetooth) -45 else -60).coerceIn(-80, -30).toDouble(),
             gainDb = getInt("live_gain_db", 12).coerceIn(-12, 24).toDouble(), skipQuiet = virtualMic)
     }
 }

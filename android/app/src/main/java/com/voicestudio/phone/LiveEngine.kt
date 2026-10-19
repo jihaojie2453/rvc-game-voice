@@ -98,7 +98,8 @@ class SampleRing(private val capacity: Int) {
  * what was skipped.
  */
 class LiveEngine(private val context: Context, private val rvc: Rvc, val params: LiveParams, settings: Rvc.Settings,
-                 private val speaker: Boolean, private val bypass: Boolean, private val dir: File) {
+                 private val speaker: Boolean, private val bypass: Boolean, private val dir: File,
+                 private val inputGain: Float = 1f) {
     data class Stats(
         val block: Double = 0.0,       // seconds of audio per step
         val compute: Double = 0.0,     // seconds per step, smoothed
@@ -129,6 +130,7 @@ class LiveEngine(private val context: Context, private val rvc: Rvc, val params:
     private val lock = Any()
     private var record: AudioRecord? = null
     private var track: AudioTrack? = null
+    @Volatile private var scoRouting = false
     private val threads = ArrayList<Thread>()
     // files are written on their own thread, so a slow flash write never holds up a step
     private val io = Executors.newSingleThreadExecutor()
@@ -189,16 +191,40 @@ class LiveEngine(private val context: Context, private val rvc: Rvc, val params:
     @SuppressLint("MissingPermission")  // the activity asks for RECORD_AUDIO first
     fun start() {
         val am = context.getSystemService(AudioManager::class.java)
-        val source = if (am.getProperty(AudioManager.PROPERTY_SUPPORT_AUDIO_SOURCE_UNPROCESSED) == "true")
-            MediaRecorder.AudioSource.UNPROCESSED else MediaRecorder.AudioSource.VOICE_RECOGNITION
+        // The headset microphone sits next to the mouth, but its SCO link takes the Bluetooth link away from
+        // A2DP: while it is on, everything the headset plays drops to narrowband call audio.
+        var headsetMic: AudioDeviceInfo? = null
+        if (context.getSharedPreferences("phone", Context.MODE_PRIVATE).getBoolean("mic_bluetooth", false)
+            && Build.VERSION.SDK_INT >= 31) {
+            headsetMic = am.getDevices(AudioManager.GET_DEVICES_INPUTS)
+                .firstOrNull { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
+            if (headsetMic != null) {
+                am.mode = AudioManager.MODE_IN_COMMUNICATION
+                if (!am.setCommunicationDevice(headsetMic)) {
+                    am.mode = AudioManager.MODE_NORMAL
+                    headsetMic = null
+                }
+            }
+        }
+        scoRouting = headsetMic != null
+        val source = when {
+            headsetMic != null -> MediaRecorder.AudioSource.VOICE_COMMUNICATION
+            am.getProperty(AudioManager.PROPERTY_SUPPORT_AUDIO_SOURCE_UNPROCESSED) == "true" ->
+                MediaRecorder.AudioSource.UNPROCESSED
+            else -> MediaRecorder.AudioSource.VOICE_RECOGNITION
+        }
         val inFormat = AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_FLOAT).setSampleRate(48000)
             .setChannelMask(AudioFormat.CHANNEL_IN_MONO).build()
         val inMin = AudioRecord.getMinBufferSize(48000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_FLOAT)
         val rec = AudioRecord.Builder().setAudioSource(source).setAudioFormat(inFormat)
             .setBufferSizeInBytes(max(inMin, 4 * 4800)).build()
         if (rec.state != AudioRecord.STATE_INITIALIZED) { rec.release(); throw IllegalStateException(str(R.string.ui_could_not_open_the_microphone)) }
-        val (device, earpiece) = outputDevice(am)
-        val usage = if (earpiece) AudioAttributes.USAGE_VOICE_COMMUNICATION else AudioAttributes.USAGE_MEDIA
+        if (headsetMic != null) rec.preferredDevice = headsetMic
+        // SCO takes the Bluetooth link away from A2DP, so playback has to follow it or the voice goes nowhere.
+        val scoOut = if (scoRouting) am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+            .firstOrNull { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO } else null
+        val (device, earpiece) = if (scoOut != null) scoOut to false else outputDevice(am)
+        val usage = if (earpiece || scoOut != null) AudioAttributes.USAGE_VOICE_COMMUNICATION else AudioAttributes.USAGE_MEDIA
         val outFormat = AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_FLOAT).setSampleRate(48000)
             .setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build()
         val outMin = AudioTrack.getMinBufferSize(48000, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_FLOAT)
@@ -235,6 +261,12 @@ class LiveEngine(private val context: Context, private val rvc: Rvc, val params:
         threads.clear()
         runCatching { record?.stop() }; record?.release(); record = null
         runCatching { track?.stop() }; track?.release(); track = null
+        if (scoRouting) {
+            scoRouting = false
+            val am = context.getSystemService(AudioManager::class.java)
+            runCatching { am.clearCommunicationDevice() }
+            runCatching { am.mode = AudioManager.MODE_NORMAL }
+        }
         stopRecording()
         io.submit { runCatching { blockLog?.close() }; blockLog = null }
         io.shutdown()
@@ -267,6 +299,10 @@ class LiveEngine(private val context: Context, private val rvc: Rvc, val params:
         while (running) {
             val n = rec.read(buf, 0, buf.size, AudioRecord.READ_BLOCKING)
             if (n > 0) {
+                // The tablet microphone is far from the mouth and UNPROCESSED capture has no AGC: without this
+                // boost normal speech sits under the silence gate, which then chops quiet syllables. The virtual
+                // microphone path has always applied the same gain (--es input_gain_db).
+                if (inputGain != 1f) for (i in 0 until n) buf[i] = LiveCore.softClip(buf[i] * inputGain)
                 mic.write(buf, n)
                 wake.release()
             } else if (n < 0) {
@@ -344,7 +380,11 @@ class LiveEngine(private val context: Context, private val rvc: Rvc, val params:
         var lastTiming = rvc.timing.copyOf()
         val setup = "block ${params.block} window ${core.window} (context ${core.window - tail}) crossfade ${params.crossfade} " +
             "search ${params.search} cushion ${params.cushion} threshold ${params.thresholdDb} decoder ${rvc.decoderDevice} " +
-            "dec frames ${rvc.decFrames} bypass $bypass mic ${if (source == MediaRecorder.AudioSource.UNPROCESSED) "unprocessed" else "voice recognition"} " +
+            "dec frames ${rvc.decFrames} bypass $bypass mic ${when (source) {
+                MediaRecorder.AudioSource.UNPROCESSED -> "unprocessed"
+                MediaRecorder.AudioSource.VOICE_COMMUNICATION -> "voice communication"
+                else -> "voice recognition"
+            }}${if (scoRouting) " via bluetooth sco" else ""} " +
             "out ${snapshot().output} (buffer ${trk.bufferSizeInFrames} of ${trk.bufferCapacityInFrames} frames)"
         log("live start: $setup")
         io.submit {

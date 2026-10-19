@@ -100,9 +100,12 @@ object RootMicController {
                 val token = "virtual-mic-${UUID.randomUUID()}"
                 rootToken = token
                 val apk = app.applicationInfo.sourceDir.replace("'", "'\\''")
+                val bluetoothMic = app.getSharedPreferences("phone", Context.MODE_PRIVATE)
+                    .getBoolean("mic_bluetooth", false)
                 val cmd = buildString {
                     append("CLASSPATH='").append(apk).append("' exec /system/bin/app_process /system/bin --nice-name=virtual_mic dev.virtualmic.Main")
                     append(" --package '").append(target).append("' --mic --seconds 0 --bridge '").append(token).append("' --watch-parent --fail-closed")
+                    if (bluetoothMic) append(" --mic-bt")
                     if (useOtherProfile) append(" --other-profile")
                     if (useAllApps) append(" --all-apps")
                 }

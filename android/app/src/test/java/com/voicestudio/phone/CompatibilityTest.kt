@@ -23,7 +23,8 @@ class CompatibilityTest {
         assertTrue(policy.tryNpu)
         assertEquals("npu_int", policy.decoder(true, true))
         assertEquals("gpu", policy.decoder(false, true))
-        assertEquals("cpu", policy.decoder(false, false))
+        // No int8 and no GPU model still means the NPU: fp16 on the HTP beats the CPU by ~10x.
+        assertEquals("npu16", policy.decoder(false, false))
         assertTrue(ComputePolicy.from("QTI", "", "", false).tryNpu)
         assertFalse(ComputePolicy.from("Samsung", "exynos", "", false).tryNpu)
     }

@@ -57,9 +57,39 @@ class LiveSettingsUi(private val context: Context, private val prefs: () -> Mode
         refreshers.add(refresh); refresh()
     }
 
-    private fun params() = LivePreferences.read(virtualMic, prefs()::getInt)
+    private fun bluetooth() = context.getSharedPreferences("phone", Context.MODE_PRIVATE)
+        .getBoolean("mic_bluetooth", false)
+    private fun params() = LivePreferences.readWithMic(virtualMic, prefs()::getInt, bluetooth())
+
+    /** The microphone is a device choice: built-in by default, or the headset's own mic (Bluetooth SCO). */
+    fun micSource(parent: LinearLayout) {
+        var refreshing = false
+        val switch = Switch(context).apply {
+            text = str(R.string.ui_use_bluetooth_mic); textSize = 13f
+            setOnCheckedChangeListener { _, on ->
+                if (refreshing) return@setOnCheckedChangeListener
+                context.getSharedPreferences("phone", Context.MODE_PRIVATE).edit()
+                    .putBoolean("mic_bluetooth", on).apply()
+                refresh()
+                changed()
+            }
+        }
+        val refresh = {
+            refreshing = true
+            switch.isChecked = context.getSharedPreferences("phone", Context.MODE_PRIVATE)
+                .getBoolean("mic_bluetooth", false)
+            refreshing = false
+        }
+        refreshers.add(refresh); refresh()
+        parent.addView(switch)
+        parent.addView(TextView(context).apply {
+            text = str(R.string.help_bluetooth_mic); textSize = 11f; setTextColor(context.getColor(R.color.muted))
+            setPadding(0, dp(2), 0, 0); setLineSpacing(dp(2).toFloat(), 1f)
+        })
+    }
 
     fun timing(parent: LinearLayout) {
+        micSource(parent)
         var refreshing = false
         val automatic = Switch(context).apply {
             text = str(R.string.live_auto_block)
@@ -94,8 +124,13 @@ class LiveSettingsUi(private val context: Context, private val prefs: () -> Mode
             str(R.string.help_crossfade))
         setting("live_cushion_cs", R.string.ui_output_buffer_reduce_dropouts, 2, 20, "0.02", "0.20",
             { prefs().getInt("live_cushion_cs", 6) }, seconds, str(R.string.help_cushion))
-        setting("live_threshold_db", R.string.ui_silence_threshold, -80, -30, "−80 dB", "−30 dB",
+        val bt = bluetooth()
+        val mic = if (bt) "_bt" else ""
+        setting("live_threshold_db$mic", R.string.ui_silence_threshold, -80, -30, "−80 dB", "−30 dB",
             { params().thresholdDb.toInt() }, { "$it dB" }, str(R.string.help_threshold))
+        setting("live_input_gain_db$mic", R.string.ui_input_gain, 0, 24, "0 dB", "+24 dB",
+            { prefs().getInt("live_input_gain_db$mic", if (bt) 0 else 12) }, { String.format(Locale.US, "%+d dB", it) },
+            str(R.string.help_input_gain))
     }
 
     fun outputGain(parent: LinearLayout) = slider(parent, str(R.string.ui_output_gain), -12, 24, "−12 dB", "+24 dB",

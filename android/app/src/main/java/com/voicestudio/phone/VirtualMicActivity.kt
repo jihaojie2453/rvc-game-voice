@@ -124,11 +124,14 @@ object VirtualMicSession {
                 n("high_pitch_ratio",1.0), n("high_pitch_knee",260.0), n("unvoiced_keep",1.0) != 0.0,
                 n("intonation_expand",0.0) != 0.0, n("intonation_ratio",1.15), n("rms_mix_rate",0.0))
             val profile = ModelLivePreferences(prefs, model.name)
-            val saved = LivePreferences.read(virtualMic = true, getInt = profile::getInt)
+            val bluetoothMic = prefs.getBoolean("mic_bluetooth", false)
+            val saved = LivePreferences.readWithMic(true, profile::getInt, bluetoothMic)
             var block = intent.getIntExtra("block",saved.block).also { require(it in 15..50) }
             val requestedBlock = block
             val autoBlock = profile.getBoolean("live_auto_block", false)
-            val inputDb = intent.getFloatExtra("input_gain_db",12f).also { require(it in 0f..36f) }
+            val inputDb = intent.getFloatExtra("input_gain_db",
+                profile.getInt(if (bluetoothMic) "live_input_gain_db_bt" else "live_input_gain_db",
+                    if (bluetoothMic) 0 else 12).toFloat()).also { require(it in 0f..36f) }
             val threshold = intent.getFloatExtra("threshold_db",saved.thresholdDb.toFloat()).also { require(it in -120f..-30f) }
             val outputDb = intent.getFloatExtra("gain_db",saved.gainDb.toFloat()).also { require(it in -12f..36f) }
             var params = saved.copy(block = block,

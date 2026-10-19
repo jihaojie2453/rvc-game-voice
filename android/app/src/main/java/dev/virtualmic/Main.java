@@ -194,7 +194,8 @@ public final class Main {
                             + " effective_frames=" + effectiveFrames
                             + " effective_ms=" + effectiveFrames * 1000.0 / source.rate);
                     stage = "create-microphone";
-                    session.mic = new MicRelay(context, session.manager, targetUid, options.micSource, options.trace);
+                    session.mic = new MicRelay(context, session.manager, targetUid, options.micSource, options.trace,
+                            options.bluetoothMic);
                     if (options.bridge != null) {
                         if (converterUid == targetUid) throw new IllegalArgumentException("Converter cannot be the target");
                         session.bridge = new AppBridge(options.bridge, converterUid, options.trace, options.failClosed);
@@ -322,6 +323,7 @@ public final class Main {
         boolean otherProfile;
         boolean allApps;
         boolean failClosed;
+        boolean bluetoothMic;
 
         static Options parse(String[] args) {
             Options options = new Options();
@@ -332,6 +334,7 @@ public final class Main {
                 if ("--other-profile".equals(arg)) { options.otherProfile = true; continue; }
                 if ("--all-apps".equals(arg)) { options.allApps = true; options.probe = false; continue; }
                 if ("--fail-closed".equals(arg)) { options.failClosed = true; continue; }
+                if ("--mic-bt".equals(arg)) { options.bluetoothMic = true; continue; }
                 if ("--mic".equals(arg)) { options.mic = true; continue; }
                 if (i + 1 >= args.length) throw new IllegalArgumentException("Missing value: " + arg);
                 String value = args[++i];

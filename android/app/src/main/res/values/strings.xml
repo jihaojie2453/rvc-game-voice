@@ -150,6 +150,9 @@
     <string name="ui_stop_the_current_recording_or_conversion_first">"Stop the current recording or conversion first."</string>
     <string name="ui_voice_changes_apply_instantly">"Voice · Changes apply instantly"</string>
     <string name="ui_output_gain">"Output gain"</string>
+    <string name="ui_input_gain">"Input gain"</string>
+    <string name="ui_use_bluetooth_mic">"Use the Bluetooth headset microphone"</string>
+    <string name="help_bluetooth_mic">Uses the microphone on the headset, closer to the mouth and steadier in level. The price: Bluetooth leaves A2DP for the call link, so everything the headset plays becomes narrowband and slightly delayed. Applies the next time the virtual microphone starts.</string>
     <string name="ui_pitch_relative_to_your_voice">"Pitch · Relative to your voice"</string>
     <string name="ui_formant_voice_texture">"Formant · Voice texture"</string>
     <string name="ui_advanced_settings_apply_on_next_start">"▾  Advanced settings · Apply on next start"</string>
@@ -376,15 +379,6 @@
     <string name="ui_apply_restart">Apply and restart</string>
     <string name="ui_restart_after_stopping">Wait for the microphone to stop, then start it again.</string>
     <string name="ui_live_per_voice_help">Output gain and timing settings are saved separately for each voice and shared with its virtual mic settings.</string>
-    <string name="ui_monitor_title">Return audio</string>
-    <string name="ui_monitor_help">Listen to the converted voice inside the app without opening a game or joining a team. Headphones are recommended to avoid feedback.</string>
-    <string name="ui_monitor_switch">Return audio (real-time)</string>
-    <string name="ui_monitor_on">Return audio is active. Adjust the voice while listening.</string>
-    <string name="ui_monitor_off">Return audio is off.</string>
-    <string name="ui_monitor_loading">Loading model…</string>
-    <string name="ui_monitor_active">Return audio active · volume, pitch and texture apply live</string>
-    <string name="ui_monitor_live_only">Live conversion is running (return audio is off)</string>
-    <string name="ui_monitor_failed">Could not start return audio: %1$s</string>
     <string name="ui_game_voice_title">Game voices</string>
     <string name="ui_game_voice_help">Each game remembers its own voice. Choose the game in Virtual mic, then choose a voice; the binding is saved automatically.</string>
     <string name="ui_manage_game_voices">Manage game voices</string>
@@ -399,6 +393,7 @@
     <string name="help_pitch">Raises or lowers the pitch. +12 = one octave. Keep 0 for a voice model that already matches.</string>
     <string name="help_formant">Changes the vocal-tract size and perceived gender. Too high sounds thin; too low sounds muffled.</string>
     <string name="help_gain">Final output volume. Too high causes clipping and harsh distortion.</string>
+    <string name="help_input_gain">Raises the microphone level before conversion. The tablet microphone is far from the mouth and has no automatic gain, so quiet syllables fall below the silence threshold and get cut. Applies from the next start.</string>
     <string name="help_block">Audio converted per step. Shorter blocks lower latency but need more compute.</string>
     <string name="help_context">Past audio the model sees with each step. More context can be steadier but uses more compute.</string>
     <string name="help_crossfade">Overlap blended between steps. Too small can click; too large adds delay.</string>
