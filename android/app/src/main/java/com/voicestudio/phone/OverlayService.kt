@@ -66,6 +66,7 @@ class OverlayService : Service() {
     private var switching: TextView? = null
     private var expanded = false
     private var syncing = false
+    private var lastTrace = 0L
 
     private val prefs by lazy { getSharedPreferences("phone", Context.MODE_PRIVATE) }
     private val modelsDir by lazy { File(getExternalFilesDir(null), "models") }
@@ -113,6 +114,7 @@ class OverlayService : Service() {
             setPadding(dp(10), dp(6), dp(14), dp(6))
         }
         val view = View(this).apply { background = circle(red, dp(20)) }
+        dot = view
         head.addView(view, LinearLayout.LayoutParams(dp(20), dp(20)))
         val label = TextView(this).apply {
             text = str(R.string.ui_overlay_waiting)
@@ -332,6 +334,10 @@ class OverlayService : Service() {
         val streaming = VirtualMicSession.lastAudioAt > 0 &&
             android.os.SystemClock.elapsedRealtime() - VirtualMicSession.lastAudioAt < 1200
         val live = phase == MicPhase.RUNNING || streaming
+        if (android.os.SystemClock.elapsedRealtime() - lastTrace > 2000) {
+            lastTrace = android.os.SystemClock.elapsedRealtime()
+            android.util.Log.i("VoiceStudio", "OVERLAY live=$live streaming=$streaming phase=$phase lastAudio=${VirtualMicSession.lastAudioAt} active=${RootMicController.active}")
+        }
         dot?.background = circle(if (live) green else red, dp(20))
         (collapsed?.getChildAt(1) as? TextView)?.text = when {
             switching?.visibility == View.VISIBLE -> str(R.string.ui_overlay_switching)
