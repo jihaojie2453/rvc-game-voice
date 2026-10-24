@@ -127,7 +127,7 @@ object VirtualMicSession {
             val j = if (useProfile) VoiceProfiles.voice(model, profileName)
             else File(model, "settings.json").takeIf { it.isFile }?.readText()?.let { JSONObject(it) } ?: JSONObject()
             fun n(key: String, value: Double) = if (j.has(key)) j.optDouble(key, value) else value
-            val settings = Rvc.Settings(n("pitch",0.0), n("formant",0.0), n("low_pitch_ratio",1.0), n("low_pitch_knee",120.0),
+            var settings = Rvc.Settings(n("pitch",0.0), n("formant",0.0), n("low_pitch_ratio",1.0), n("low_pitch_knee",120.0),
                 n("high_pitch_ratio",1.0), n("high_pitch_knee",260.0), n("unvoiced_keep",1.0) != 0.0,
                 n("intonation_expand",0.0) != 0.0, n("intonation_ratio",1.15), n("rms_mix_rate",0.0))
             val profile = ModelLivePreferences(prefs, model.name)
@@ -168,8 +168,26 @@ object VirtualMicSession {
                 if (next == block) break
                 block = next; params = params.copy(block = block)
             }
-            log("CONFIG model=${model.name} block_ms=${block*10} requested_block_ms=${requestedBlock*10} auto_block=$autoBlock context_ms=${params.context*10} window_ms=${params.window(null)*10} crossfade_ms=${params.crossfade*10} cushion_ms=${(params.cushion*1000).roundToInt()} threshold_db=${params.thresholdDb} input_gain_db=$inputDb output_gain_db=${params.gainDb} decoder=$dec threads=$threads bypass=false")
+            log("CONFIG model=${model.name} profile=$profileName block_ms=${block*10} requested_block_ms=${requestedBlock*10} auto_block=$autoBlock context_ms=${params.context*10} window_ms=${params.window(null)*10} crossfade_ms=${params.crossfade*10} cushion_ms=${(params.cushion*1000).roundToInt()} threshold_db=${params.thresholdDb} input_gain_db=$inputDb output_gain_db=${params.gainDb} decoder=$dec threads=$threads bypass=false")
             log("OPTIMIZATION fixed_formant=${settings.formant} decoder_frames=${engine!!.decFrames} skip_quiet=${params.skipQuiet}")
+            // 热生效：方案文件里的「音色参数」改了就换上新值；音色质感（共振峰）在建会话时已定死，只能重启。
+            if (useProfile) {
+                val profileFile = VoiceProfiles.profileFile(model, profileName)
+                val fixedFormant = settings.formant
+                var lastStamp = profileFile.lastModified()
+                thread(name = "virtual-mic-settings") {
+                    while (running) {
+                        Thread.sleep(500)
+                        val stamp = profileFile.lastModified()
+                        if (stamp == lastStamp) continue
+                        lastStamp = stamp
+                        val fresh = VoiceProfiles.settings(VoiceProfiles.voice(model, profileName))
+                        settings = if (Math.abs(fresh.formant - fixedFormant) < 1e-9) fresh
+                                   else fresh.copy(formant = fixedFormant)
+                        log("SETTINGS_APPLIED profile=$profileName pitch=${settings.pitch} formant_fixed=$fixedFormant rms=${settings.rmsMixRate}")
+                    }
+                }
+            }
             // Quiet blocks finish early; retain room for a full inference when speech begins.
             val bufferMs = (params.cushion * 1000).roundToInt() + 20
             val startDelayMs=(block*10+warmupMaxMs+bufferMs).roundToInt().coerceIn(block*10+bufferMs,1500)
