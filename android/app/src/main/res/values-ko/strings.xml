@@ -389,4 +389,6 @@
     <string name="ui_decoder_whole">전체 디코더</string>
     <string name="ui_decoder_split">분할 디코더</string>
     <string name="ui_saved_restart_mic">저장했습니다. 고급 설정을 들으려면 가상 마이크를 다시 시작하세요.</string>
+    <string name="ui_listen">미리 듣기</string>
+    <string name="ui_listen_stop">미리 듣기 중지</string>
 </resources>

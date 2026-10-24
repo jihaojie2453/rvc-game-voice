@@ -225,87 +225,11 @@
             </LinearLayout>
 
             <!-- ======== live page: the microphone converted into the earphones ======== -->
-            <LinearLayout
-                android:id="@+id/page_live"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:visibility="gone">
-                <LinearLayout style="@style/Card">
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:gravity="center_vertical"
-                        android:orientation="horizontal">
-                        <TextView
-                            style="@style/CardTitle"
-                            android:layout_width="0dp"
-                            android:layout_weight="1"
-                            android:text="@string/ui_live_conversion" />
-                        <TextView
-                            android:id="@+id/live_rec_time"
-                            style="@style/SliderValue"
-                            android:layout_marginEnd="8dp"
-                            android:textColor="@color/rec"
-                            android:visibility="gone" />
-                        <Button
-                            android:id="@+id/live_rec"
-                            style="@style/SoftButton"
-                            android:layout_width="wrap_content"
-                            android:layout_height="36dp"
-                            android:layout_marginEnd="8dp"
-                            android:enabled="false"
-                            android:text="@string/ui_record_2" />
-                        <Button
-                            android:id="@+id/live_toggle"
-                            android:layout_width="wrap_content"
-                            android:layout_height="36dp"
-                            android:background="@drawable/btn_primary"
-                            android:minWidth="0dp"
-                            android:minHeight="0dp"
-                            android:paddingStart="20dp"
-                            android:paddingEnd="20dp"
-                            android:stateListAnimator="@null"
-                            android:text="@string/ui_start"
-                            android:textAllCaps="false"
-                            android:textColor="#FFFFFF"
-                            android:textSize="14sp"
-                            android:textStyle="bold" />
-                    </LinearLayout>
-                    <TextView
-                        android:id="@+id/live_device"
-                        style="@style/Hint"
-                        android:layout_width="match_parent"
-                        android:layout_marginTop="4dp" />
-                    <com.voicestudio.phone.WaveformView
-                        android:id="@+id/live_in_wave"
-                        android:layout_width="match_parent"
-                        android:layout_height="56dp"
-                        android:layout_marginTop="10dp"
-                        android:background="@drawable/wave_bg" />
-                    <com.voicestudio.phone.WaveformView
-                        android:id="@+id/live_out_wave"
-                        android:layout_width="match_parent"
-                        android:layout_height="56dp"
-                        android:layout_marginTop="6dp"
-                        android:background="@drawable/wave_bg" />
-                    <TextView
-                        android:id="@+id/live_stats"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
-                        android:fontFamily="monospace"
-                        android:lineSpacingExtra="2dp"
-                        android:textColor="@color/text"
-                        android:textSize="12sp" />
-                    <TextView
-                        android:id="@+id/live_info"
-                        style="@style/Hint"
-                        android:layout_width="match_parent"
-                        android:layout_marginTop="6dp"
-                        android:text="@string/ui_use_headphones_without_headphones_audio_plays_through" />
-                </LinearLayout>
-            </LinearLayout>
+                        <LinearLayout
+                            android:id="@+id/page_live"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical" />>
 
             <!-- ======== settings (the gear at the top): voice models, where the models run, records ======== -->
             <LinearLayout
