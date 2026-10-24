@@ -111,6 +111,7 @@ class MainActivity : Activity() {
         setupConvertPage()
         setupConfigPage()
         setupLivePage()
+        setupStatusPage()
         setupSettingsPage()
         // 0.5.3 的每音色一份 settings.json 与 voice_live:* 先搬成「默认方案」；失败不阻塞启动
         runCatching { VoiceProfiles.migrateIfNeeded(prefs, modelsDir) }
@@ -120,6 +121,7 @@ class MainActivity : Activity() {
         // 0.5.3 存过 "convert"，那一页已经不在页签里，统一落到「配置」
         showPage(if (saved == RECORD || saved == LIVE || saved == SETTINGS) saved else CONFIG)
         refreshModels()
+        renderStatusCard()  // 模型列表就绪后重画状态页的音色/方案
         refreshRecordings()
         if (!ready) showPage(SETTINGS)  // first run: models come first
         decFile = hooks.getStringExtra("dec") ?: decFile
@@ -148,9 +150,11 @@ class MainActivity : Activity() {
         if (recorder == null) refreshRecordings()  // realtime recordings may have been saved from the notification
         updateGameVoiceSummary()
         if (LiveSession.engine != null) { ui.removeCallbacks(liveTicker); ui.post(liveTicker) }  // back from the notification
+        ui.removeCallbacks(statusTicker); ui.post(statusTicker)
     }
 
     override fun onPause() {
+        ui.removeCallbacks(statusTicker)
         player.stop()
         super.onPause()
     }
@@ -1442,6 +1446,168 @@ class MainActivity : Activity() {
         parent.addView(row)
     }
 
+    // ---------------------------------------------------------------- status page (game -> voice -> profile -> start)
+
+    private var statusBody: LinearLayout? = null
+    private var statusState: TextView? = null
+    private var statusButton: Button? = null
+    private val statusTicker = object : Runnable {
+        override fun run() { renderStatusState(); ui.postDelayed(this, 500) }
+    }
+
+    /** 状态页顶部那张卡：选游戏、音色、方案，然后直接开麦。旧实时变声卡片暂留在这张卡下面。 */
+    private fun setupStatusPage() {
+        val page = f<LinearLayout>(R.id.page_live)
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundResource(R.drawable.card)
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) }
+        }
+        card.addView(TextView(this).apply {
+            text = str(R.string.ui_status); textSize = 17f
+            typeface = Typeface.create("sans-serif", Typeface.BOLD); setTextColor(getColor(R.color.text))
+        })
+        val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        card.addView(body)
+        statusBody = body
+        page.addView(card, 0)
+        renderStatusCard()
+    }
+
+    private fun renderStatusCard() {
+        val body = statusBody ?: return
+        body.removeAllViews()
+        fun caption(text: String) = TextView(this).apply {
+            this.text = text; textSize = 12f
+            setTextColor(getColor(R.color.muted)); setPadding(0, dp(10), 0, dp(2))
+        }
+        fun row(text: String, action: () -> Unit) = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            addView(TextView(this@MainActivity).apply {
+                this.text = text; textSize = 16f
+                setTypeface(typeface, Typeface.BOLD); setTextColor(getColor(R.color.text))
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(Button(this@MainActivity, null, 0, R.style.SoftButton).apply {
+                this.text = str(R.string.ui_change); textSize = 12f
+                setOnClickListener { action() }
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(40)))
+        }
+
+        val games = GameBinding.games(prefs)
+        if (games.isEmpty()) {
+            body.addView(TextView(this).apply {
+                text = str(R.string.ui_no_games_yet); textSize = 12f
+                setTextColor(getColor(R.color.muted)); setPadding(0, dp(6), 0, dp(6))
+            })
+            body.addView(Button(this, null, 0, R.style.SoftButton).apply {
+                text = str(R.string.ui_add_game)
+                layoutParams = LinearLayout.LayoutParams(-1, dp(46))
+                setOnClickListener { showPage(CONFIG) }
+            })
+            statusButton = null; statusState = null
+            return
+        }
+        val pkg = prefs.getString("status_game", null)?.takeIf { it in games } ?: games.first()
+        prefs.edit().putString("status_game", pkg).apply()
+        val pm = packageManager
+        val label = runCatching { pm.getApplicationInfo(pkg, 0).loadLabel(pm).toString() }.getOrDefault(pkg)
+        val bound = GameBinding.get(prefs, pkg)
+        val modelDir = models.firstOrNull { it.name == bound?.model } ?: models.firstOrNull()
+        val profiles = modelDir?.let { VoiceProfiles.list(it) } ?: emptyList()
+
+        body.addView(caption(str(R.string.ui_game_setup)))
+        body.addView(row(label) {
+            val names = games.map { p ->
+                runCatching { pm.getApplicationInfo(p, 0).loadLabel(pm).toString() }.getOrDefault(p)
+            }.toTypedArray()
+            AlertDialog.Builder(this).setTitle(str(R.string.ui_game_setup))
+                .setItems(names) { _, which ->
+                    prefs.edit().putString("status_game", games[which]).apply(); renderStatusCard()
+                }
+                .setNegativeButton(str(R.string.ui_cancel), null).show()
+        })
+        body.addView(caption(str(R.string.ui_voice_of)))
+        body.addView(row(modelDir?.name ?: str(R.string.ui_add_a_model_first)) {
+            AlertDialog.Builder(this).setTitle(str(R.string.ui_voice_of))
+                .setItems(models.map { it.name }.toTypedArray()) { _, which ->
+                    val dir = models[which]
+                    val first = VoiceProfiles.list(dir).firstOrNull() ?: VoiceProfiles.DEFAULT
+                    GameBinding.bind(prefs, pkg, dir.name, first)
+                    renderStatusCard()
+                }
+                .setNegativeButton(str(R.string.ui_cancel), null).show()
+        })
+
+        body.addView(caption(str(R.string.ui_profiles)))
+        val profileSpinner = Spinner(this).apply { isEnabled = profiles.isNotEmpty() }
+        profileSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, profiles)
+            .apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+        profileSpinner.setSelection(profiles.indexOf(bound?.profile ?: "").let { if (it >= 0) it else 0 })
+        body.addView(profileSpinner)
+
+        val button = Button(this, null, 0, R.style.SoftButton).apply {
+            layoutParams = LinearLayout.LayoutParams(-1, dp(50)).apply { topMargin = dp(12) }
+            setOnClickListener {
+                if (RootMicController.active || VirtualMicSession.isActive) {
+                    RootMicController.stop()
+                    stopService(Intent(this@MainActivity, LiveService::class.java))
+                    renderStatusState()
+                    return@setOnClickListener
+                }
+                val dir = modelDir
+                if (dir == null) { toast(str(R.string.ui_add_a_model_first)); return@setOnClickListener }
+                val chosen = profiles.getOrNull(profileSpinner.selectedItemPosition) ?: VoiceProfiles.DEFAULT
+                GameBinding.bind(prefs, pkg, dir.name, chosen)
+                prefs.edit().putString("virtual_mic_target", pkg).putString("virtual_mic_model", dir.name).apply()
+                startStatusSession(pkg, dir.name)
+            }
+        }
+        body.addView(button)
+        statusButton = button
+
+        val state = TextView(this).apply {
+            textSize = 12f; setTextColor(getColor(R.color.text))
+            setPadding(0, dp(10), 0, 0); setLineSpacing(dp(3).toFloat(), 1f)
+        }
+        body.addView(state)
+        statusState = state
+
+        body.addView(Button(this, null, 0, R.style.SoftButton).apply {
+            text = str(R.string.ui_manage_game_voices); textSize = 12f
+            layoutParams = LinearLayout.LayoutParams(-1, dp(42)).apply { topMargin = dp(8) }
+            setOnClickListener { startActivity(Intent(this@MainActivity, VirtualMicScreenActivity::class.java)) }
+        })
+        renderStatusState()
+    }
+
+    private fun renderStatusState() {
+        val state = statusState ?: return
+        val running = RootMicController.active || VirtualMicSession.isActive
+        statusButton?.text = str(if (running) R.string.ui_stop_virtual_mic else R.string.ui_start_virtual_mic)
+        state.text = if (running) RootMicController.status else str(R.string.ui_virtual_microphone_is_off)
+    }
+
+    /** 和虚拟麦页面相同的启动顺序：先拿权限，再起前台服务，最后交给 root 控制器。 */
+    private fun startStatusSession(pkg: String, modelName: String) {
+        val mic = android.Manifest.permission.RECORD_AUDIO
+        if (checkSelfPermission(mic) != PackageManager.PERMISSION_GRANTED) {
+            val ask = mutableListOf(mic)
+            if (android.os.Build.VERSION.SDK_INT >= 33) ask += android.Manifest.permission.POST_NOTIFICATIONS
+            requestPermissions(ask.toTypedArray(), STATUS_MIC)
+            return
+        }
+        if (LiveSession.running) { toast(str(R.string.ui_stop_the_existing_live_conversion_first)); return }
+        try {
+            startForegroundService(Intent(this, LiveService::class.java).putExtra("virtual_mic", true))
+            RootMicController.start(applicationContext, pkg, modelName)
+        } catch (e: Throwable) {
+            toast(e.message ?: str(R.string.ui_could_not_start_2))
+            stopService(Intent(this, LiveService::class.java))
+        }
+        renderStatusState()
+    }
+
     private fun setupLivePage() {
         f<Button>(R.id.live_toggle).setOnClickListener { toggleLive() }
         f<Button>(R.id.live_rec).setOnClickListener { toggleLiveRecording() }
@@ -1778,6 +1944,11 @@ class MainActivity : Activity() {
         else if (code == MIC) toast(str(R.string.ui_microphone_permission_is_required_to_record))
         else if (code == LIVE_MIC && mic) toggleLive()
         else if (code == LIVE_MIC) toast(str(R.string.ui_microphone_permission_is_required_for_live_conversion))
+        else if (code == STATUS_MIC && mic) {
+            val pkg = prefs.getString("status_game", null) ?: return
+            val model = GameBinding.get(prefs, pkg)?.model ?: models.firstOrNull()?.name ?: return
+            startStatusSession(pkg, model)
+        } else if (code == STATUS_MIC) toast(str(R.string.ui_microphone_permission_is_required_for_live_conversion))
     }
 
     @Deprecated("Deprecated in Java")
@@ -1876,6 +2047,7 @@ class MainActivity : Activity() {
         private const val PICK_FOLDER = 3
         private const val PICK_ZIP = 4
         private const val LIVE_MIC = 5
+        private const val STATUS_MIC = 6
         private const val W8A16 = "model.dec.w8a16.onnx"
         private const val RECORD = "record"
         private const val CONFIG = "config"
