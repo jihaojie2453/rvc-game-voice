@@ -413,4 +413,13 @@
     <string name="ui_game_setup">游戏配置</string>
     <string name="ui_edit_next_build">参数编辑将在下一版提供。</string>
     <string name="ui_voice_of">音色</string>    <string name="ui_default_profile_locked">默认方案是只读基线，请新建方案后再调整。</string>
+    <string name="ui_edit_params">编辑参数</string>
+    <string name="ui_voice_params">音色参数</string>
+    <string name="ui_model_settings">模型设置</string>
+    <string name="ui_restart_mic_hint">保存后下次开麦生效。音色质感（共振峰）、高级设置与模型设置都需要重启虚拟麦。</string>
+    <string name="ui_follow_global">跟随通用</string>
+    <string name="ui_auto">自动</string>
+    <string name="ui_decoder_whole">整图解码器</string>
+    <string name="ui_decoder_split">拆分解码器</string>
+    <string name="ui_saved_restart_mic">已保存。高级设置需重启虚拟麦后生效。</string>
 </resources>

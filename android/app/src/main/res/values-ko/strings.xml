@@ -380,4 +380,13 @@
     <string name="ui_game_setup">게임 설정</string>
     <string name="ui_edit_next_build">파라미터 편집은 다음 빌드에서 제공됩니다.</string>
     <string name="ui_voice_of">목소리</string>    <string name="ui_default_profile_locked">기본 프로필은 읽기 전용입니다. 새 프로필을 만들어 조정하세요.</string>
+    <string name="ui_edit_params">파라미터 편집</string>
+    <string name="ui_voice_params">목소리</string>
+    <string name="ui_model_settings">모델</string>
+    <string name="ui_restart_mic_hint">저장한 설정은 다음에 가상 마이크를 켤 때 적용됩니다. 공명점·고급·모델 설정은 다시 시작해야 합니다.</string>
+    <string name="ui_follow_global">일반 설정 따르기</string>
+    <string name="ui_auto">자동</string>
+    <string name="ui_decoder_whole">전체 디코더</string>
+    <string name="ui_decoder_split">분할 디코더</string>
+    <string name="ui_saved_restart_mic">저장했습니다. 고급 설정을 들으려면 가상 마이크를 다시 시작하세요.</string>
 </resources>

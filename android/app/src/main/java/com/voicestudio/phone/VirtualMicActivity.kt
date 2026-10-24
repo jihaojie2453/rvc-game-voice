@@ -115,27 +115,38 @@ object VirtualMicSession {
         val captureFailure = java.util.concurrent.atomic.AtomicReference<Throwable?>()
         try {
             val prefs = context.getSharedPreferences("phone", Context.MODE_PRIVATE)
-            val modelName = intent.getStringExtra("model") ?: prefs.getString("model", null)
+            // 「配置」页给这个游戏选好的 音色 + 方案；没有绑定就退回旧的选择
+            val target = prefs.getString("virtual_mic_target", null)
+            val bound = target?.let { GameBinding.get(prefs, it) }
+            val modelName = intent.getStringExtra("model") ?: bound?.model
+                ?: prefs.getString("virtual_mic_model", prefs.getString("model", null))
             val models = File(base, "models").listFiles()?.filter { it.isDirectory && File(it, "model.enc.onnx").isFile } ?: emptyList()
             val model = models.firstOrNull { it.name == modelName } ?: models.firstOrNull() ?: error(str(R.string.ui_no_models_available))
-            val j = File(model, "settings.json").takeIf { it.isFile }?.readText()?.let { JSONObject(it) } ?: JSONObject()
-            fun n(key: String, value: Double) = j.optDouble(key, value)
+            val profileName = intent.getStringExtra("profile") ?: bound?.profile ?: VoiceProfiles.DEFAULT
+            val useProfile = VoiceProfiles.exists(model, profileName)
+            val j = if (useProfile) VoiceProfiles.voice(model, profileName)
+            else File(model, "settings.json").takeIf { it.isFile }?.readText()?.let { JSONObject(it) } ?: JSONObject()
+            fun n(key: String, value: Double) = if (j.has(key)) j.optDouble(key, value) else value
             val settings = Rvc.Settings(n("pitch",0.0), n("formant",0.0), n("low_pitch_ratio",1.0), n("low_pitch_knee",120.0),
                 n("high_pitch_ratio",1.0), n("high_pitch_knee",260.0), n("unvoiced_keep",1.0) != 0.0,
                 n("intonation_expand",0.0) != 0.0, n("intonation_ratio",1.15), n("rms_mix_rate",0.0))
             val profile = ModelLivePreferences(prefs, model.name)
+            // 方案的「高级设置」优先，缺的键再回落到 0.5.3 的 voice_live 偏好
+            val engineJson = if (useProfile) VoiceProfiles.engine(model, profileName) else JSONObject()
+            fun pInt(key: String, def: Int) = if (engineJson.has(key)) engineJson.optInt(key, def) else profile.getInt(key, def)
+            fun pBool(key: String, def: Boolean) = if (engineJson.has(key)) engineJson.optBoolean(key, def) else profile.getBoolean(key, def)
             val bluetoothMic = prefs.getBoolean("mic_bluetooth", false)
-            val saved = LivePreferences.readWithMic(true, profile::getInt, bluetoothMic)
+            val saved = LivePreferences.readWithMic(true, { key, def -> pInt(key, def) }, bluetoothMic)
             var block = intent.getIntExtra("block",saved.block).also { require(it in 15..50) }
             val requestedBlock = block
-            val autoBlock = profile.getBoolean("live_auto_block", false)
+            val autoBlock = pBool("live_auto_block", false)
             val inputDb = intent.getFloatExtra("input_gain_db",
-                profile.getInt(if (bluetoothMic) "live_input_gain_db_bt" else "live_input_gain_db",
+                pInt(if (bluetoothMic) "live_input_gain_db_bt" else "live_input_gain_db",
                     if (bluetoothMic) 0 else 12).toFloat()).also { require(it in 0f..36f) }
             val threshold = intent.getFloatExtra("threshold_db",saved.thresholdDb.toFloat()).also { require(it in -120f..-30f) }
             val outputDb = intent.getFloatExtra("gain_db",saved.gainDb.toFloat()).also { require(it in -12f..36f) }
             var params = saved.copy(block = block,
-                context = intent.getIntExtra("context", profile.getInt("live_context", LiveParams.defaultContext(block, saved.crossfade))), thresholdDb = threshold.toDouble(), gainDb = outputDb.toDouble(),
+                context = intent.getIntExtra("context", pInt("live_context", LiveParams.defaultContext(block, saved.crossfade))), thresholdDb = threshold.toDouble(), gainDb = outputDb.toDouble(),
                 skipQuiet = !intent.getBooleanExtra("no_quiet_skip",false))
             val dec = if (File(model,"model.dec.w8a16.onnx").isFile) "model.dec.w8a16.onnx" else "model.dec.onnx"
             val threads = intent.getIntExtra("threads",1).also { require(it in 1..8) }

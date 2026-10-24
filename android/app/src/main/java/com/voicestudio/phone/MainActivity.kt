@@ -357,9 +357,18 @@ class MainActivity : Activity() {
             setOnClickListener { action() }
         }
         // 「默认」方案是只读基线：不能改名、不能删除、参数也不能改；只有自己新建的方案可操作。
+        val editBtn = Button(this, null, 0, R.style.SoftButton).apply {
+            text = str(R.string.ui_edit_params); textSize = 13f
+            setOnClickListener {
+                val target = picked()
+                if (target == VoiceProfiles.DEFAULT) toast(str(R.string.ui_default_profile_locked))
+                else showProfileEditor(dir, target)
+            }
+        }
         fun syncOps() {
             val readOnly = picked() == VoiceProfiles.DEFAULT
             for (i in 1 until ops.childCount) ops.getChildAt(i).isEnabled = !readOnly
+            editBtn.isEnabled = !readOnly
         }
         ops.addView(op(str(R.string.ui_new_profile)) {
             val base = picked()
@@ -390,6 +399,7 @@ class MainActivity : Activity() {
                 .show()
         }, LinearLayout.LayoutParams(0, dp(42), 1f))
         body.addView(ops)
+        body.addView(editBtn, LinearLayout.LayoutParams(-1, dp(44)).apply { topMargin = dp(8) })
         profileSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) = syncOps()
             override fun onNothingSelected(parent: AdapterView<*>?) {}
@@ -407,6 +417,136 @@ class MainActivity : Activity() {
             .setNegativeButton(str(R.string.ui_cancel), null)
             .show()
     }
+    /** 方案参数：音色参数 / 高级设置 / 模型设置。默认方案在调用处已拦掉，这里再拦一次。 */
+    private fun showProfileEditor(dir: File, profile: String) {
+        if (profile == VoiceProfiles.DEFAULT) { toast(str(R.string.ui_default_profile_locked)); return }
+        val voice = JSONObject(VoiceProfiles.voice(dir, profile).toString())
+        val engine = JSONObject(VoiceProfiles.engine(dir, profile).toString())
+        val modelSettings = VoiceProfiles.modelSettings(dir)
+        // 打开就把缺的键补成「当前有效值」：这个音色 settings.json 里的调音 + 0.5.3 的 voice_live 偏好。
+        // 保存后方案自成一体，不再随旧偏好变化。
+        val legacyVoice = File(dir, "settings.json").takeIf { it.isFile }
+            ?.let { runCatching { JSONObject(it.readText()) }.getOrNull() } ?: JSONObject()
+        val legacyLive = ModelLivePreferences(prefs, dir.name)
+        fun seed(json: JSONObject, key: String, value: Double) { if (!json.has(key)) json.put(key, value) }
+        seed(voice, "pitch", legacyVoice.optDouble("pitch", 0.0))
+        seed(voice, "formant", legacyVoice.optDouble("formant", 0.0))
+        seed(voice, "low_pitch_ratio", legacyVoice.optDouble("low_pitch_ratio", 1.0))
+        seed(voice, "low_pitch_knee", legacyVoice.optDouble("low_pitch_knee", 120.0))
+        seed(voice, "high_pitch_ratio", legacyVoice.optDouble("high_pitch_ratio", 1.0))
+        seed(voice, "high_pitch_knee", legacyVoice.optDouble("high_pitch_knee", 260.0))
+        seed(voice, "intonation_ratio", legacyVoice.optDouble("intonation_ratio", 1.15))
+        seed(voice, "rms_mix_rate", legacyVoice.optDouble("rms_mix_rate", 0.0))
+        seed(voice, "unvoiced_keep", legacyVoice.optDouble("unvoiced_keep", 1.0))
+        seed(voice, "intonation_expand", legacyVoice.optDouble("intonation_expand", 0.0))
+        seed(engine, "live_block", legacyLive.getInt("live_block", 27).toDouble())
+        seed(engine, "live_context", legacyLive.getInt("live_context", 124).toDouble())
+        seed(engine, "live_crossfade", legacyLive.getInt("live_crossfade", 8).toDouble())
+        seed(engine, "live_cushion_cs", legacyLive.getInt("live_cushion_cs", 6).toDouble())
+        seed(engine, "live_threshold_db", legacyLive.getInt("live_threshold_db", -60).toDouble())
+        seed(engine, "live_input_gain_db", legacyLive.getInt("live_input_gain_db", 12).toDouble())
+        seed(engine, "live_gain_db", legacyLive.getInt("live_gain_db", 12).toDouble())
+        seed(engine, "live_split", if (legacyLive.getBoolean("live_split", false)) 1.0 else 0.0)
+        seed(engine, "live_auto_block", if (legacyLive.getBoolean("live_auto_block", false)) 1.0 else 0.0)
+
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(4), dp(20), dp(4))
+        }
+        fun heading(text: String, hint: String? = null) {
+            body.addView(TextView(this).apply {
+                this.text = text; textSize = 14f; setTypeface(typeface, Typeface.BOLD)
+                setTextColor(getColor(R.color.text)); setPadding(0, dp(14), 0, dp(2))
+            })
+            if (hint != null) body.addView(TextView(this).apply {
+                this.text = hint; textSize = 11f; setTextColor(getColor(R.color.muted))
+            })
+        }
+        fun numOf(json: JSONObject, key: String, def: Double) = if (json.has(key)) json.optDouble(key, def) else def
+        fun param(json: JSONObject, key: String, label: String, min: Double, max: Double, step: Double, def: Double, unit: String) {
+            val value = TextView(this).apply {
+                textSize = 12f; typeface = Typeface.MONOSPACE
+                setTextColor(getColor(R.color.accent_strong))
+                text = format(numOf(json, key, def), step) + unit
+            }
+            val steps = ((max - min) / step).roundToInt().coerceAtLeast(1)
+            val bar = sliderRow(body, label, value, format(min, step), format(max, step), steps)
+            bar.progress = ((numOf(json, key, def) - min) / step).roundToInt().coerceIn(0, steps)
+            bar.setOnSeekBarChangeListener(slider { p, done ->
+                val v = min + p * step
+                value.text = format(v, step) + unit
+                if (done) json.put(key, v)
+            })
+        }
+        fun switchParam(json: JSONObject, key: String, label: String, def: Boolean) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(10), 0, 0)
+            }
+            row.addView(TextView(this).apply {
+                text = label; textSize = 13f; setTextColor(getColor(R.color.text))
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            val sw = Switch(this).apply { isChecked = numOf(json, key, if (def) 1.0 else 0.0) != 0.0 }
+            sw.setOnCheckedChangeListener { _, on -> json.put(key, if (on) 1.0 else 0.0) }
+            row.addView(sw)
+            body.addView(row)
+        }
+
+        heading(str(R.string.ui_voice_params))
+        param(voice, "pitch", str(R.string.ui_pitch_relative_to_your_voice), -24.0, 24.0, 1.0, 0.0, "")
+        param(voice, "formant", str(R.string.ui_formant_voice_texture), -2.0, 2.0, 0.1, 0.0, "")
+        param(voice, "low_pitch_ratio", str(R.string.ui_low_pitch_protection_strength), 1.0, 3.0, 0.1, 1.0, "×")
+        param(voice, "low_pitch_knee", str(R.string.ui_low_pitch_protection_threshold), 60.0, 200.0, 5.0, 120.0, " Hz")
+        param(voice, "high_pitch_ratio", str(R.string.ui_high_pitch_protection_strength), 1.0, 3.0, 0.1, 1.0, "×")
+        param(voice, "high_pitch_knee", str(R.string.ui_high_pitch_protection_threshold), 200.0, 600.0, 10.0, 260.0, " Hz")
+        param(voice, "intonation_ratio", str(R.string.ui_intonation_expansion_strength), 1.0, 1.5, 0.05, 1.15, "×")
+        param(voice, "rms_mix_rate", str(R.string.ui_volume_envelope), 0.0, 1.0, 0.05, 0.0, "")
+        switchParam(voice, "unvoiced_keep", str(R.string.ui_preserve_breath_and_consonants), true)
+        switchParam(voice, "intonation_expand", str(R.string.ui_expand_intonation), false)
+
+        heading(str(R.string.ui_advanced_settings), str(R.string.ui_restart_mic_hint))
+        param(engine, "live_block", str(R.string.ui_block_audio_converted_per_step), 15.0, 50.0, 1.0, 27.0, "×10 ms")
+        param(engine, "live_context", str(R.string.ui_additional_context), 0.0, 300.0, 10.0, 100.0, "×10 ms")
+        param(engine, "live_crossfade", str(R.string.ui_crossfade), 4.0, 12.0, 1.0, 8.0, "×10 ms")
+        param(engine, "live_cushion_cs", str(R.string.ui_output_buffer_reduce_dropouts), 2.0, 20.0, 1.0, 6.0, "×10 ms")
+        param(engine, "live_threshold_db", str(R.string.ui_silence_threshold), -80.0, -30.0, 5.0, -60.0, " dB")
+        param(engine, "live_input_gain_db", str(R.string.ui_input_gain), 0.0, 24.0, 1.0, 12.0, " dB")
+        param(engine, "live_gain_db", str(R.string.ui_output_gain), -12.0, 24.0, 1.0, 12.0, " dB")
+        switchParam(engine, "live_split", str(R.string.ui_split_decoder_npu_bit_cpu), false)
+
+        heading(str(R.string.ui_model_settings))
+        val computeKeys = arrayOf("follow", "cpu", "npu")
+        val computeLabels = arrayOf(str(R.string.ui_follow_global), "CPU", "NPU")
+        val compute = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_item, computeLabels.toList())
+                .apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+            setSelection(computeKeys.indexOf(modelSettings.optString("compute", "follow")).coerceAtLeast(0))
+        }
+        body.addView(compute)
+        val decoderKeys = arrayOf("auto", "whole", "split")
+        val decoderLabels = arrayOf(str(R.string.ui_auto), str(R.string.ui_decoder_whole), str(R.string.ui_decoder_split))
+        val decoder = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_item, decoderLabels.toList())
+                .apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+            setSelection(decoderKeys.indexOf(modelSettings.optString("decoder", "auto")).coerceAtLeast(0))
+        }
+        body.addView(decoder)
+
+        AlertDialog.Builder(this)
+            .setTitle("${str(R.string.ui_edit_params)} · $profile")
+            .setView(ScrollView(this).apply { addView(body) })
+            .setPositiveButton(str(R.string.ui_save)) { _, _ ->
+                VoiceProfiles.write(dir, profile, JSONObject()
+                    .put(VoiceProfiles.GROUP_VOICE, voice)
+                    .put(VoiceProfiles.GROUP_ENGINE, engine))
+                VoiceProfiles.writeModelSettings(dir, JSONObject()
+                    .put("compute", computeKeys[compute.selectedItemPosition.coerceIn(0, computeKeys.size - 1)])
+                    .put("decoder", decoderKeys[decoder.selectedItemPosition.coerceIn(0, decoderKeys.size - 1)]))
+                toast(str(R.string.ui_saved_restart_mic))
+            }
+            .setNegativeButton(str(R.string.ui_cancel), null)
+            .show()
+    }
+
     private fun askProfileName(title: String, initial: String, onOk: (String) -> Unit) {
         val input = EditText(this).apply {
             setText(initial); setSingleLine(); setSelection(text.length)
