@@ -307,7 +307,8 @@ object VirtualMicSession {
                             continue
                         }
                         meter = Meter(core.lastInPeak, core.lastRawPeak, ms, drops)
-                        VirtualMicSession.noteAudio()
+                        // 绿点只认「真的在说话」：游戏占着麦克风、只有环境声时不点亮。
+                        if (core.lastSpoke) VirtualMicSession.noteAudio()
                         if (!running) break
                         val pcm = ByteArray(y.size*2)
                         for (i in y.indices) {

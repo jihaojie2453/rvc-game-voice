@@ -428,6 +428,7 @@
     <string name="ui_overlay_profile">方案</string>
     <string name="ui_overlay_live">变声中</string>
     <string name="ui_overlay_waiting">等待麦克风</string>
+    <string name="ui_overlay_connected">已连接 · 等你说话</string>
     <string name="ui_overlay_switching">切换中…</string>
     <string name="ui_overlay_quit">退出应用</string>
     <string name="ui_overlay_permission">请允许「显示在其他应用上层」，这样才能保留悬浮麦克风按钮</string>

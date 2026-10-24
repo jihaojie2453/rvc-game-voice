@@ -85,6 +85,11 @@ class LiveCore(private val rvc: Rvc, val params: LiveParams) {
     private val gateHold = 48000 * 3 / 10
     private val gateAttack = 1f / (48000 * 5 / 1000)
     private val gateRelease = 1f / (48000 * 50 / 1000)
+    // 说话判定：最近约 30 秒里每一块输入峰值的环形缓冲（240 ms 一块 → 128 块 ≈ 31 秒）
+    private val peakRing = FloatArray(128)
+    private var peakAt = 0
+    private var peakFilled = 0
+    private val peakSorted = FloatArray(128)
     @Volatile private var threshold = 10.0.pow(params.thresholdDb / 20).toFloat()
     @Volatile var gain = 10.0.pow(params.gainDb / 20).toFloat()
 
@@ -116,6 +121,9 @@ class LiveCore(private val rvc: Rvc, val params: LiveParams) {
         private set
     var lastSkippedQuiet = false
         private set
+    /** 悬浮窗用：这一块的麦克风电平明显高于最近的环境底噪，也就是「真的有人在说话」。不参与任何音频处理。 */
+    var lastSpoke = false
+        private set
 
     /** After a skip or an audio restart the past no longer lines up: start the stream over. */
     fun reset() {
@@ -124,6 +132,22 @@ class LiveCore(private val rvc: Rvc, val params: LiveParams) {
         previous = null
         gate = 0f
         holdLeft = 0
+    }
+
+    /**
+     * 这一块算不算「在说话」：峰值要比最近 ~30 秒的第 20 百分位（环境底噪）高 8 dB，并且高于静音阈值的 2 倍。
+     * 只看电平，不改任何音频；游戏占着麦克风但没人说话时，环境声到不了这个线，绿灯就不会亮。
+     */
+    private fun judgeSpeech(peak: Float): Boolean {
+        peakRing[peakAt] = peak
+        peakAt = (peakAt + 1) % peakRing.size
+        if (peakFilled < peakRing.size) peakFilled++
+        val n = peakFilled
+        if (n < 8) return false  // 刚开会话还没有底噪可参照
+        System.arraycopy(peakRing, 0, peakSorted, 0, n)
+        java.util.Arrays.sort(peakSorted, 0, n)
+        val floor = peakSorted[(n * 2) / 10]
+        return peak > max(floor * 2.51f, threshold * 2f)
     }
 
     /** x48: the newest [w48] samples at 48 kHz (the step's block last). Returns [b48] samples for the earphones. */
@@ -135,6 +159,7 @@ class LiveCore(private val rvc: Rvc, val params: LiveParams) {
             reset()
             lastSkippedQuiet = true
             lastInPeak = x48.maxOfOrNull { abs(it) } ?: 0f
+            lastSpoke = judgeSpeech(lastInPeak)
             lastRawPeak = 0f; lastClipped = false
             lastPrepMs = (System.nanoTime() - t0) / 1e6; lastPostMs = 0.0
             return FloatArray(b48)
@@ -185,6 +210,7 @@ class LiveCore(private val rvc: Rvc, val params: LiveParams) {
         }
         if (clipped) clips++
         lastInPeak = inPeak
+        lastSpoke = judgeSpeech(inPeak)
         lastRawPeak = rawPeak
         lastClipped = clipped
         lastPostMs = (System.nanoTime() - t2) / 1e6
