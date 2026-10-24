@@ -416,7 +416,7 @@
     <string name="ui_edit_params">编辑参数</string>
     <string name="ui_voice_params">音色参数</string>
     <string name="ui_model_settings">模型设置</string>
-    <string name="ui_restart_mic_hint">保存后下次开麦生效。音色质感（共振峰）、高级设置与模型设置都需要重启虚拟麦。</string>
+    <string name="ui_restart_mic_hint">音色参数改完立即生效（音色质感除外）。高级设置与模型设置需要重启虚拟麦。</string>
     <string name="ui_follow_global">跟随通用</string>
     <string name="ui_auto">自动</string>
     <string name="ui_decoder_whole">整图解码器</string>

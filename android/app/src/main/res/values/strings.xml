@@ -415,7 +415,7 @@
     <string name="ui_edit_params">Edit parameters</string>
     <string name="ui_voice_params">Voice</string>
     <string name="ui_model_settings">Model</string>
-    <string name="ui_restart_mic_hint">Saved settings apply the next time the virtual mic starts. Formant, advanced and model settings always need a restart.</string>
+    <string name="ui_restart_mic_hint">Voice settings apply instantly (except Formant). Advanced and Model settings need the virtual mic restarted.</string>
     <string name="ui_follow_global">Follow general</string>
     <string name="ui_auto">Auto</string>
     <string name="ui_decoder_whole">Whole decoder</string>
