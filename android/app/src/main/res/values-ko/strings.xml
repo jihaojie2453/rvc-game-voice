@@ -333,7 +333,7 @@
     <string name="ui_sending_call_audio">" · 통화 송신 중"</string>
     <string name="ui_join_a_call_on_the_site">" · 사이트에서 통화에 참여하세요"</string>
     <string name="ui_voice_disconnected_tap_connect_to_resume">"음성 연결 해제 · 다시 연결 버튼을 눌러 주세요."</string>
-    <string name="ui_record_and_transform_your_voice_on_your">"폰에서 녹음하고 바로 바꾸는 목소리"</string>
+    <string name="ui_record_and_transform_your_voice_on_your">게임이 듣는 목소리를 바꿔 보세요</string>
     <string name="ui_settings">"설정"</string>
     <string name="ui_convert_2">"변환"</string>
     <string name="ui_live_4">"실시간"</string>

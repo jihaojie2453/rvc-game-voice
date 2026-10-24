@@ -345,7 +345,7 @@
     <string name="ui_sending_call_audio">" · Sending call audio"</string>
     <string name="ui_join_a_call_on_the_site">" · Join a call on the site"</string>
     <string name="ui_voice_disconnected_tap_connect_to_resume">"Voice disconnected · Tap Connect to resume."</string>
-    <string name="ui_record_and_transform_your_voice_on_your">"Record and transform your voice on your phone"</string>
+    <string name="ui_record_and_transform_your_voice_on_your">Change the voice your games hear</string>
     <string name="ui_settings">"Settings"</string>
     <string name="ui_convert_2">"Convert"</string>
     <string name="ui_live_4">"Live"</string>
