@@ -399,4 +399,17 @@
     <string name="help_crossfade">Overlap blended between steps. Too small can click; too large adds delay.</string>
     <string name="help_cushion">Output buffer that hides uneven compute. More buffer means fewer dropouts but more delay.</string>
     <string name="help_threshold">Inputs quieter than this are not converted. Too high cuts word beginnings; too low lets noise through.</string>
+    <string name="ui_config">Configure</string>
+    <string name="ui_status">Status</string>
+    <string name="ui_general">General</string>
+    <string name="ui_add_game">Add game</string>
+    <string name="ui_no_games_yet">No games yet. Tap “Add game” to start.</string>
+    <string name="ui_profiles">Profiles</string>
+    <string name="ui_new_profile">New profile</string>
+    <string name="ui_profile_name">Profile name</string>
+    <string name="ui_duplicate">Duplicate</string>
+    <string name="ui_rename">Rename</string>
+    <string name="ui_game_setup">Game setup</string>
+    <string name="ui_edit_next_build">Parameter editing arrives in the next build.</string>
+    <string name="ui_voice_of">Voice</string>    <string name="ui_default_profile_locked">The default profile is read-only. Create your own profile to tune it.</string>
 </resources>

@@ -80,9 +80,9 @@ object VoiceProfiles {
         }
     }
 
-    /** 新建方案。[from] 不为空时以它为模板复制，否则从出厂值开始。 */
+    /** 新建方案。[from] 不为空时以它为模板复制，否则从出厂值开始。「默认」这个名字留给基线。 */
     fun create(modelDir: File, name: String, from: JSONObject? = null): Boolean {
-        if (name.isBlank() || exists(modelDir, name)) return false
+        if (name.isBlank() || name == DEFAULT || exists(modelDir, name)) return false
         write(modelDir, name, from?.let { JSONObject(it.toString()) } ?: JSONObject())
         return true
     }
@@ -91,15 +91,18 @@ object VoiceProfiles {
         if (!exists(modelDir, from)) false else create(modelDir, name, read(modelDir, from))
 
     /** 改名：写新文件成功后才删旧文件。 */
+    /** 改名：写新文件成功后才删旧文件。「默认」是基线，不允许改名。 */
     fun rename(modelDir: File, old: String, new: String): Boolean {
-        if (!exists(modelDir, old) || new.isBlank() || exists(modelDir, new)) return false
+        if (old == DEFAULT) return false
+        if (!exists(modelDir, old) || new.isBlank() || new == DEFAULT || exists(modelDir, new)) return false
         write(modelDir, new, read(modelDir, old))
         profileFile(modelDir, old).delete()
         return true
     }
 
-    /** 删除方案；最后一个方案不允许删（否则音色没有可用的参数集）。 */
+    /** 删除方案。「默认」永远保留，最后一个方案也不允许删（否则音色没有可用的参数集）。 */
     fun delete(modelDir: File, name: String): Boolean {
+        if (name == DEFAULT) return false
         if (!exists(modelDir, name) || list(modelDir).size <= 1) return false
         return profileFile(modelDir, name).delete()
     }

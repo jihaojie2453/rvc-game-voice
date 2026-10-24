@@ -400,4 +400,17 @@
     <string name="ui_voice_disconnected_tap_connect_to_resume">声音已断开 · 点按“连接”恢复。</string>
     <string name="ui_record_and_transform_your_voice_on_your">在手机上录制并转换你的声音</string>
     <string name="usage_steps">1. 准备模型\n在设置中下载共享模型。用电脑端转换器转换 RVC v2、48 kHz、带 f0 的音色，然后导入 ZIP 或发送到平板。\n\n2. 文件转换与返音\n在“转换”页录音或导入音频。要实时试听，选择音色并打开“返音试听”，建议戴耳机。\n\n3. 游戏开黑（需要 Root）\n在 Root 管理器（SukiSU）里给 Voice Studio 授予 Root 权限。打开“虚拟麦克风”，选择游戏和音色，点开始。每个游戏会记住自己的音色。启动游戏并打开它的麦克风即可。\n\n4. 全部应用与安全文件夹\n“所有应用”模式会替换支持的输入，包括安全文件夹。单应用“其他分身”模式需要先在该分身中打开目标麦克风。蜂窝通话和蓝牙尚未验证。\n\n5. 停止\n在虚拟麦克风页面或通知中点停止。应用会恢复原始麦克风，不会结束通话。没有输入时会暂停采集和推理。</string>
+    <string name="ui_config">配置</string>
+    <string name="ui_status">状态</string>
+    <string name="ui_general">通用</string>
+    <string name="ui_add_game">添加游戏</string>
+    <string name="ui_no_games_yet">还没有添加游戏，点“添加游戏”开始。</string>
+    <string name="ui_profiles">方案</string>
+    <string name="ui_new_profile">新建方案</string>
+    <string name="ui_profile_name">方案名称</string>
+    <string name="ui_duplicate">复制</string>
+    <string name="ui_rename">重命名</string>
+    <string name="ui_game_setup">游戏配置</string>
+    <string name="ui_edit_next_build">参数编辑将在下一版提供。</string>
+    <string name="ui_voice_of">音色</string>    <string name="ui_default_profile_locked">默认方案是只读基线，请新建方案后再调整。</string>
 </resources>
