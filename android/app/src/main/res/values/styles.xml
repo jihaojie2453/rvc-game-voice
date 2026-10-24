@@ -76,5 +76,8 @@
         <item name="android:textSize">13sp</item>
         <item name="android:textAllCaps">false</item>
         <item name="android:stateListAnimator">@null</item>
+        <!-- 代码里用 Button(ctx, null, 0, R.style.SoftButton) 构造会跳过主题的按钮默认样式，
+             这时 gravity 会退回 TextView 的顶部对齐；显式居中。 -->
+        <item name="android:gravity">center</item>
     </style>
 </resources>
