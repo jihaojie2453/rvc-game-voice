@@ -42,14 +42,17 @@ import kotlin.concurrent.thread
 import kotlin.math.roundToInt
 
 /**
- * Two pages: 녹음 (record with a live waveform, play and seek, a list of takes) and 변환 (model, pitch and
- * texture, advanced settings, original and converted waveforms with linked playheads, save and share).
+ * Four tabs: 录音 (record the dry voice with a live waveform and a list of takes), 配置 (games -> voice ->
+ * profiles, where every profile keeps its own voice and engine settings), 状态 (pick a game, a voice and a
+ * profile, then start the virtual microphone) and 通用 (compute device, threads, language, model import).
  *
  * Files live in the app's own folder (Android/data/com.voicestudio.phone/files):
  *   common/hubert.onnx, common/rmvpe.onnx                         shared by every voice
  *   models/<name>/model.enc.onnx, model.dec.onnx, settings.json   one folder per voice ("불러오기" copies them in)
- *   recordings/<name>.wav                                            the 녹음 page's takes
- * settings.json uses the studio's realtime_settings.json keys and is updated as the sliders move.
+ *   models/<name>/profiles/<profile>.json                         每音色的方案：音色参数 + 高级设置
+ *   models/<name>/model_settings.json                             该音色共享的计算设备与解码器
+ *   recordings/<name>.wav                                            the 录音 tab's takes
+ * settings.json is the 0.5.3 layout and is only read for migration and as the profile editor's seed.
  */
 class MainActivity : Activity() {
     private val ui = Handler(Looper.getMainLooper())
@@ -106,9 +109,8 @@ class MainActivity : Activity() {
         f<View>(R.id.tab_live).setOnClickListener { showPage(LIVE) }
         f<View>(R.id.tab_setting).setOnClickListener { showPage(SETTINGS) }
         f<View>(R.id.gear).visibility = View.GONE  // 设置页已有页签，齿轮只留空位
-        f<Button>(R.id.settings_close).setOnClickListener { showPage(lastPage) }
+        f<Button>(R.id.settings_close).visibility = View.GONE  // 通用已经是页签，不再需要关闭按钮
         setupRecordPage()
-        setupConvertPage()
         setupConfigPage()
         setupLivePage()
         setupStatusPage()
@@ -128,7 +130,7 @@ class MainActivity : Activity() {
         hooks.getStringExtra("virtual_mic_socket")?.let {
             startActivity(Intent(this, VirtualMicActivity::class.java).putExtras(hooks))
         }
-        hooks.getStringExtra("convert")?.let { debugConvert(File(it)) }
+
         hooks.getStringExtra("stream")?.let { debugStream(File(it)) }
         if (hooks.getBooleanExtra("dspbench", false)) thread { StreamBench.dsp { android.util.Log.i("VoiceStudio", it) } }
         hooks.getStringExtra("bench")?.let { path ->  // test hook: --es bench <dec.onnx> --es ep cpu|qnn_htp|qnn_gpu
@@ -172,12 +174,6 @@ class MainActivity : Activity() {
     private var lastPage = RECORD
 
     private fun showPage(which: String) {
-        // the newest take follows to 변환 by itself, unless a file was picked there since
-        val t = take
-        if (which == CONVERT && t != null && t !== input && (input == null || inputTake != null) && recorder == null) {
-            setInput(t, takeName)
-            inputTake = t
-        }
         page = which
         if (which != SETTINGS) lastPage = which
         for ((name, pageId, tabId) in listOf(
@@ -189,8 +185,6 @@ class MainActivity : Activity() {
             f<View>(pageId).visibility = if (name == which) View.VISIBLE else View.GONE
             f<View>(tabId).isSelected = name == which
         }
-        // 转换页在 0.5.4 里已从页签移除，暂时只保留「录音」页的旧入口，等参数页做完再删
-        f<View>(R.id.page_convert).visibility = if (which == CONVERT) View.VISIBLE else View.GONE
         if (which != SETTINGS) prefs.edit().putString("page", which).apply() else showCompute()
         f<ScrollView>(R.id.scroll).scrollTo(0, 0)
         if (which == LIVE) { loadLiveSliders(); showLive() }
@@ -199,8 +193,6 @@ class MainActivity : Activity() {
 
     private fun playButtonFor(wave: WaveformView?): Button? = when (wave?.id) {
         R.id.rec_wave -> f(R.id.rec_play)
-        R.id.in_wave -> f(R.id.in_play)
-        R.id.out_wave -> f(R.id.out_play)
         else -> null
     }
 
@@ -579,7 +571,6 @@ class MainActivity : Activity() {
         }
         wave.onSeek = { showRecTime() }
         wave.onSeekDone = { at -> if (player.isPlaying(wave)) take?.let { player.play(wave, it, at) }; showRecTime() }
-        f<Button>(R.id.to_convert).setOnClickListener { showPage(CONVERT) }
         ticker()
     }
 
@@ -590,7 +581,7 @@ class MainActivity : Activity() {
             f<WaveformView>(R.id.rec_wave).livePeaks = r.peaks()
             f<TextView>(R.id.rec_time).text = clock(r.samples)
         } else if (player.playing) {
-            showRecTime(); showTimes()
+            showRecTime()
         }
         ui.postDelayed({ ticker() }, 50)
     }
@@ -616,7 +607,7 @@ class MainActivity : Activity() {
             f<TextView>(R.id.rec_title).text = str(R.string.ui_recording)
             f<TextView>(R.id.rec_info).text = str(R.string.ui_input_tap_again_to_stop, started.sourceName)
             f<WaveformView>(R.id.rec_wave).livePeaks = FloatArray(0)
-            listOf(R.id.rec_play, R.id.rec_rewind, R.id.to_convert).forEach { f<Button>(it).isEnabled = false }
+            listOf(R.id.rec_play, R.id.rec_rewind).forEach { f<Button>(it).isEnabled = false }
         } else {
             val x = r.stop()
             recorder = null
@@ -624,7 +615,7 @@ class MainActivity : Activity() {
             if (x.size < Rvc.SR / 5) {
                 f<TextView>(R.id.rec_info).text = str(R.string.ui_the_recording_is_too_short)
                 f<WaveformView>(R.id.rec_wave).setAudio(take)
-                if (take != null) listOf(R.id.rec_play, R.id.rec_rewind, R.id.to_convert).forEach { f<Button>(it).isEnabled = true }
+                if (take != null) listOf(R.id.rec_play, R.id.rec_rewind).forEach { f<Button>(it).isEnabled = true }
                 return
             }
             recordingsDir.mkdirs()
@@ -642,7 +633,7 @@ class MainActivity : Activity() {
         f<WaveformView>(R.id.rec_wave).setAudio(x)
         f<TextView>(R.id.rec_title).text = name
         f<TextView>(R.id.rec_info).text = str(R.string.ui_tap_or_drag_the_waveform_to_seek)
-        listOf(R.id.rec_play, R.id.rec_rewind, R.id.to_convert).forEach { f<Button>(it).isEnabled = true }
+        listOf(R.id.rec_play, R.id.rec_rewind).forEach { f<Button>(it).isEnabled = true }
         showRecTime()
     }
 
@@ -685,44 +676,6 @@ class MainActivity : Activity() {
         }
     }
 
-    // ---------------------------------------------------------------- convert page
-
-    private fun setupConvertPage() {
-        f<SeekBar>(R.id.pitch).setOnSeekBarChangeListener(slider { p, done ->
-            // a shift from the speaker's own voice, as the studio's 음높이: +9 = nine semitones up
-            f<TextView>(R.id.pitch_value).text = if (p == 24) str(R.string.ui_semitones) else String.format(Locale.US, str(R.string.ui_semitones_2), p - 24)
-            if (done) saveSetting("pitch", (p - 24).toDouble())
-        })
-        f<SeekBar>(R.id.formant).setOnSeekBarChangeListener(slider { p, done ->
-            f<TextView>(R.id.formant_value).text = String.format(Locale.US, "%.1f", (p - 20) / 10.0)
-            if (done) saveSetting("formant", (p - 20) / 10.0)
-        })
-        f<Spinner>(R.id.model).onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, view: View?, i: Int, id: Long) {
-                prefs.edit().putString("model", models.getOrNull(i)?.name).apply()
-                loadSliders()
-                if (page == LIVE) { loadLiveSliders(); showLive() }
-            }
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
-        }
-        f<Button>(R.id.import_model).setOnClickListener { chooseImport() }
-        f<Button>(R.id.pick).setOnClickListener {
-            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("audio/*"), PICK_AUDIO)
-        }
-        val inWave = f<WaveformView>(R.id.in_wave)
-        val outWave = f<WaveformView>(R.id.out_wave)
-        // the two playheads move together, so the same moment can be heard before and after
-        inWave.onSeek = { at -> outWave.position = at; showTimes() }
-        outWave.onSeek = { at -> inWave.position = at; showTimes() }
-        inWave.onSeekDone = { at -> outWave.position = at; if (player.isPlaying(inWave)) input?.let { player.play(inWave, it, at) }; showTimes() }
-        outWave.onSeekDone = { at -> inWave.position = at; if (player.isPlaying(outWave)) output?.let { player.play(outWave, it, at) }; showTimes() }
-        f<Button>(R.id.in_play).setOnClickListener { togglePlay(inWave, input, outWave) }
-        f<Button>(R.id.out_play).setOnClickListener { togglePlay(outWave, output, inWave) }
-        f<Button>(R.id.convert).setOnClickListener { runConversion() }
-        f<Button>(R.id.save).setOnClickListener { save()?.let { toast(str(R.string.ui_saved_to_music_voicestudio)) } }
-        f<Button>(R.id.share).setOnClickListener { save()?.let { share(it) } }
-        buildAdvanced()
-    }
 
     private fun slider(changed: (Int, Boolean) -> Unit) = object : SeekBar.OnSeekBarChangeListener {
         override fun onProgressChanged(s: SeekBar, p: Int, fromUser: Boolean) = changed(p, false)
@@ -739,14 +692,6 @@ class MainActivity : Activity() {
         partner?.position = from
     }
 
-    private fun showTimes() {
-        val inWave = f<WaveformView>(R.id.in_wave)
-        val outWave = f<WaveformView>(R.id.out_wave)
-        if (player.isPlaying(inWave)) outWave.position = inWave.position
-        if (player.isPlaying(outWave)) inWave.position = outWave.position
-        if (input != null) f<TextView>(R.id.in_time).text = "${clock(inWave.position)} / ${clock(inWave.samples)}"
-        if (output != null) f<TextView>(R.id.out_time).text = "${clock(outWave.position)} / ${clock(outWave.samples)}"
-    }
 
     // advanced settings, built from a spec list like the studio's web page
     private data class Spec(val key: String, val label: String, val min: Double, val max: Double, val step: Double,
@@ -764,50 +709,6 @@ class MainActivity : Activity() {
     private val advSwitches = HashMap<String, Switch>()
     private var loadingSliders = false
 
-    private fun buildAdvanced() {
-        val page = f<LinearLayout>(R.id.page_convert)
-        val card = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundResource(R.drawable.card)
-            setPadding(dp(16), dp(14), dp(16), dp(14))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) }
-        }
-        val header = TextView(this).apply { textSize = 13f; setTypeface(typeface, Typeface.BOLD); setTextColor(getColor(R.color.text)) }
-        val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
-        fun setOpen(open: Boolean) {
-            body.visibility = if (open) View.VISIBLE else View.GONE
-            header.text = if (open) str(R.string.ui_advanced_settings) else str(R.string.ui_advanced_settings_2)
-            prefs.edit().putBoolean("advanced_open", open).apply()
-        }
-        header.setOnClickListener { setOpen(body.visibility != View.VISIBLE) }
-        card.addView(header)
-        card.addView(body)
-        for ((key, label) in switchSpecs) {
-            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(10), 0, 0) }
-            row.addView(TextView(this).apply { text = label; textSize = 13f; layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f) })
-            val sw = Switch(this)
-            sw.setOnCheckedChangeListener { _, on -> saveSetting(key, if (on) 1.0 else 0.0) }
-            row.addView(sw)
-            advSwitches[key] = sw
-            body.addView(row)
-        }
-        for (spec in specs) {
-            val value = TextView(this).apply { textSize = 13f; typeface = Typeface.MONOSPACE; setTextColor(getColor(R.color.accent_strong)) }
-            val bar = sliderRow(body, spec.label, value, spec.minLabel, spec.maxLabel, ((spec.max - spec.min) / spec.step).roundToInt())
-            bar.setOnSeekBarChangeListener(slider { p, done ->
-                val x = spec.min + p * spec.step
-                value.text = format(x, spec.step) + if (spec.unit.isEmpty()) "" else " ${spec.unit}"
-                if (done) saveSetting(spec.key, x)
-            })
-            advSliders[spec.key] = bar
-        }
-        body.addView(TextView(this).apply {
-            text = str(R.string.ui_for_settings_marked_off_values_further_from)
-            textSize = 11f; setTextColor(getColor(R.color.muted)); setPadding(0, dp(10), 0, 0)
-        })
-        page.addView(card, page.indexOfChild(f(R.id.convert)))
-        setOpen(prefs.getBoolean("advanced_open", false))
-    }
 
     private fun sliderRow(parent: LinearLayout, label: String, value: TextView, minLabel: String, maxLabel: String, steps: Int): SeekBar {
         val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(12), 0, 0) }
@@ -846,19 +747,6 @@ class MainActivity : Activity() {
     }
 
     /** Sliders and switches from the selected model's settings.json. */
-    private fun loadSliders() {
-        val dir = currentModel() ?: return
-        val j = settingsJson(dir)
-        fun num(k: String, d: Double) = if (j.has(k)) j.optDouble(k, d) else d
-        f<TextView>(R.id.voice_hint).text = str(R.string.ui_saved_to, dir.name)
-        loadingSliders = true
-        f<SeekBar>(R.id.pitch).progress = (num("pitch", 0.0) + 24).roundToInt()
-        f<SeekBar>(R.id.formant).progress = ((num("formant", 0.0) + 2) * 10).roundToInt()
-        for (spec in specs) advSliders[spec.key]?.progress = ((num(spec.key, spec.default) - spec.min) / spec.step).roundToInt()
-        advSwitches["unvoiced_keep"]?.isChecked = num("unvoiced_keep", 1.0) != 0.0
-        advSwitches["intonation_expand"]?.isChecked = num("intonation_expand", 0.0) != 0.0
-        loadingSliders = false
-    }
 
     private fun settingsOf(dir: File): Rvc.Settings {
         val j = settingsJson(dir)
@@ -900,8 +788,6 @@ class MainActivity : Activity() {
             if (!commonOk) append(str(R.string.ui_shared_models_hubert_onnx_and_rmvpe_onnx))
             if (models.isEmpty()) append(str(R.string.ui_voice_model_name_enc_onnx_name_dec))
         }
-        loadSliders()
-        updateConvertButton()
         if (page == LIVE) { loadLiveSliders(); showLive() }
     }
 
@@ -952,113 +838,9 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun updateConvertButton() {
-        f<Button>(R.id.convert).isEnabled = input != null && models.isNotEmpty() && !busy && !LiveSession.running
-    }
 
-    private fun setInput(x: FloatArray, name: String) {
-        player.stop()
-        input = x
-        inputName = name.replace(Regex("[\\\\/:*?\"<>| ]+"), "_")
-        f<WaveformView>(R.id.in_wave).setAudio(x)
-        f<TextView>(R.id.in_title).text = str(R.string.ui_original, inputName)
-        f<TextView>(R.id.in_info).text = ""
-        f<Button>(R.id.in_play).isEnabled = true
-        f<View>(R.id.result).visibility = View.GONE
-        output = null
-        showTimes()
-        updateConvertButton()
-    }
 
-    private fun runConversion(done: ((FloatArray, Double, Double) -> Unit)? = null) {
-        if (RootMicController.active || VirtualMicSession.isActive) { toast(str(R.string.ui_turn_off_the_virtual_microphone_first)); return }
-        val x = input ?: return
-        val dir = currentModel() ?: return
-        val settings = settingsOf(dir)
-        val normalize = f<Switch>(R.id.normalize).isChecked
-        val threads = hooks.getIntExtra("threads", prefs.getInt("threads", 4))
-        val devices = fileDevices(dir)
-        val hooked = hooks.getStringExtra("ep") != null || hooks.getStringExtra("front") != null
-        val ep = hooks.getStringExtra("ep") ?: devices.ep
-        val front = hooks.getStringExtra("front") ?: devices.front
-        val dec = if (hooked || decFile != "model.dec.onnx") decFile else devices.file
-        val convert = f<Button>(R.id.convert)
-        val progress = f<ProgressBar>(R.id.progress)
-        player.stop()
-        busy = true
-        updateConvertButton()
-        convert.text = str(R.string.ui_converting)
-        progress.visibility = View.VISIBLE
-        progress.progress = 0
-        f<View>(R.id.result).visibility = View.GONE
-        thread {
-            try {
-                val started = System.currentTimeMillis()
-                val seed = hooks.getIntExtra("seed", 0)  // test hook: --ei seed N (another draw of the synthesizer's noise)
-                val fixedWindows = hooks.getBooleanExtra("fixed_windows", false)  // test hook: the NPU's windows on the CPU
-                val key = "${dir.path}|$threads|$ep|$dec|$front|${hooks.getIntExtra("chunk_s", 3)}|$seed|$fixedWindows"
-                if (engineKey != key) {
-                    val firstNpu = (ep.startsWith("qnn") && !File(dir, dec.removeSuffix(".onnx") + ".$ep.onnx").isFile) ||
-                        (front.startsWith("qnn") && commonDir.listFiles { f -> f.name.startsWith("hubert.") && f.name.contains(".$front.") }.isNullOrEmpty())
-                    ui.post { convert.text = if (firstNpu) str(R.string.ui_preparing_npu_the_first_run_may_take) else str(R.string.ui_loading_model) }
-                    engine?.close()
-                    engine = null
-                    LiveSession.release()
-                    val chunk = hooks.getIntExtra("chunk_s", 3) * Rvc.SR16  // test hook: --ei chunk_s N
-                    engine = Rvc(commonDir, dir, threads, ep, dec, front, chunk, seed = seed.toLong(), cpuFixedWindows = fixedWindows, allowFallback = !hooked)
-                    engineKey = key
-                }
-                val loaded = System.currentTimeMillis()
-                ui.post { convert.text = str(R.string.ui_converting) }
-                var y = engine!!.convert(x, settings) { d, total -> ui.post { progress.max = total; progress.progress = d } }
-                if (normalize) y = AudioIo.peakNormalize(y)
-                val took = (System.currentTimeMillis() - loaded) / 1000.0
-                val load = (loaded - started) / 1000.0
-                done?.invoke(y, load, took)
-                ui.post { showResult(y, dir.name, x.size, took, load) }
-            } catch (e: Throwable) {
-                android.util.Log.e("VoiceStudio", "conversion failed", e)
-                ui.post { toast(str(R.string.ui_conversion_failed, e.message)) }
-            } finally {
-                ui.post { busy = false; convert.text = str(R.string.ui_convert); progress.visibility = View.GONE; updateConvertButton() }
-            }
-        }
-    }
 
-    private fun showResult(y: FloatArray, model: String, samples: Int, took: Double, load: Double) {
-        output = y
-        outputName = "${inputName}_${model}_" + SimpleDateFormat("MMdd_HHmm", Locale.US).format(Date())
-        val outWave = f<WaveformView>(R.id.out_wave)
-        outWave.setAudio(y)
-        outWave.position = f<WaveformView>(R.id.in_wave).position
-        f<TextView>(R.id.out_title).text = str(R.string.ui_converted, model)
-        f<TextView>(R.id.out_info).text = String.format(Locale.US, str(R.string.ui_converted_s_of_audio_in_s), samples.toFloat() / Rvc.SR, took,
-            str(R.string.ui_front_end_decoder, engine?.frontDevice ?: "CPU", engine?.decoderDevice ?: "CPU") +
-                (engine?.fallbackNotice?.let { " · $it" } ?: ""),
-            if (load > 0.5) String.format(Locale.US, str(R.string.ui_model_loading_s), load) else "")
-        f<View>(R.id.result).visibility = View.VISIBLE
-        showTimes()
-        val scroll = f<ScrollView>(R.id.scroll)
-        scroll.post { scroll.smoothScrollTo(0, f<View>(R.id.result).bottom) }
-    }
-
-    /** Copies the result into Music/VoiceStudio (MediaStore: no storage permission needed). */
-    private fun save(): Uri? {
-        val y = output ?: return null
-        val values = ContentValues().apply {
-            put(MediaStore.Audio.Media.DISPLAY_NAME, "$outputName.wav")
-            put(MediaStore.Audio.Media.MIME_TYPE, "audio/wav")
-            put(MediaStore.Audio.Media.RELATIVE_PATH, Environment.DIRECTORY_MUSIC + "/VoiceStudio")
-        }
-        val uri = contentResolver.insert(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, values) ?: return null
-        contentResolver.openOutputStream(uri)?.use { AudioIo.writeWav(it, y) }
-        return uri
-    }
-
-    private fun share(uri: Uri) {
-        startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("audio/wav")
-            .putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), str(R.string.ui_share)))
-    }
 
     // ---------------------------------------------------------------- model import
 
@@ -1191,7 +973,6 @@ class MainActivity : Activity() {
     private fun copyIn(model: File?, sources: List<Source>) {
         val help = f<TextView>(R.id.help)
         busy = true
-        updateConvertButton()
         thread {
             try {
                 model?.mkdirs()
@@ -1685,7 +1466,7 @@ class MainActivity : Activity() {
         val pitch = sliderRow(voice, str(R.string.ui_pitch_relative_to_your_voice), pitchValue, "−24", "+24", 48)
         pitch.setOnSeekBarChangeListener(slider { p, done ->
             pitchValue.text = if (p == 24) str(R.string.ui_semitones) else String.format(Locale.US, str(R.string.ui_semitones_2), p - 24)
-            if (done) { saveSetting("pitch", (p - 24).toDouble()); loadSliders() }
+            if (done) saveSetting("pitch", (p - 24).toDouble())
         })
         liveBars["pitch"] = pitch
         parameterHelp(voice, str(R.string.help_pitch))
@@ -1693,7 +1474,7 @@ class MainActivity : Activity() {
         val formant = sliderRow(voice, str(R.string.ui_formant_voice_texture), formantValue, "−2", "+2", 40)
         formant.setOnSeekBarChangeListener(slider { p, done ->
             formantValue.text = String.format(Locale.US, "%.1f", (p - 20) / 10.0)
-            if (done) { saveSetting("formant", (p - 20) / 10.0); loadSliders() }
+            if (done) saveSetting("formant", (p - 20) / 10.0)
         })
         liveBars["formant"] = formant
         parameterHelp(voice, str(R.string.help_formant))
@@ -1779,7 +1560,6 @@ class MainActivity : Activity() {
         engine?.close(); engine = null; engineKey = ""  // the file engine makes room for the realtime models
         ui.removeCallbacks(liveTicker)
         ui.post(liveTicker)
-        updateConvertButton()
         thread {
             try {
                 while (true) {
@@ -1819,7 +1599,7 @@ class MainActivity : Activity() {
                 LiveSession.stop(applicationContext)
             } finally {
                 livePreparing = false
-                ui.post { showLive(); updateConvertButton() }
+                ui.post { showLive() }
             }
         }
     }
@@ -1840,8 +1620,7 @@ class MainActivity : Activity() {
                     liveMessage = (failure?.let { "$it\n" } ?: "") + String.format(Locale.US, str(R.string.ui_saved_to_record_s), saved.first.nameWithoutExtension.removeSuffix("_원본"), saved.third)
                 }
                 showLive()
-                updateConvertButton()
-            }
+                    }
         }
     }
 
@@ -1959,38 +1738,6 @@ class MainActivity : Activity() {
         when (code) {
             PICK_FOLDER -> runCatching { importFolder(uri) }.onFailure { toast(str(R.string.ui_could_not_read_folder, it.message)) }
             PICK_ZIP -> runCatching { importZip(uri) }.onFailure { toast(str(R.string.ui_could_not_read_zip, it.message)) }
-            PICK_AUDIO -> {
-                f<TextView>(R.id.in_info).text = str(R.string.ui_reading_file)
-                thread {
-                    try {
-                        val x = AudioIo.decode(this, uri)
-                        val name = (query(uri) ?: str(R.string.ui_file)).substringBeforeLast('.')
-                        ui.post { setInput(x, name); inputTake = null }
-                    } catch (e: Exception) {
-                        ui.post { f<TextView>(R.id.in_info).text = str(R.string.ui_could_not_read_file, e.message) }
-                    }
-                }
-            }
-        }
-    }
-
-    /** Test hook: `am start -n com.voicestudio.phone/.MainActivity --es convert <wav> [--ei threads N --es ep cpu|nnapi
-     *  --es dec model.dec16.onnx]` converts with the selected model, writes files/test_output.wav, logs the timing. */
-    private fun debugConvert(file: File) {
-        thread {
-            val x = AudioIo.decode(this, Uri.fromFile(file))
-            ui.post {
-                showPage(CONVERT)
-                setInput(x, file.nameWithoutExtension); inputTake = null
-                f<Switch>(R.id.normalize).isChecked = false
-                runConversion { y, load, took ->
-                    AudioIo.writeWav(File(base, "test_output.wav"), y)
-                    val t = engine!!.timing
-                    android.util.Log.i("VoiceStudio", String.format(Locale.US,
-                        "converted %.1f s in %.1f s (model load %.1f s; %s): hubert %.1f, rmvpe %.1f, enc %.1f, dec %.1f, other %.1f",
-                        x.size.toFloat() / Rvc.SR, took, load, engineKey.substringAfter('|'), t[0], t[1], t[2], t[3], t[4]))
-                }
-            }
         }
     }
 
@@ -2042,7 +1789,6 @@ class MainActivity : Activity() {
     private fun toast(text: String) = Toast.makeText(this, text, Toast.LENGTH_LONG).show()
 
     companion object {
-        private const val PICK_AUDIO = 1
         private const val MIC = 2
         private const val PICK_FOLDER = 3
         private const val PICK_ZIP = 4
@@ -2051,7 +1797,6 @@ class MainActivity : Activity() {
         private const val W8A16 = "model.dec.w8a16.onnx"
         private const val RECORD = "record"
         private const val CONFIG = "config"
-        private const val CONVERT = "convert"
         private const val LIVE = "live"
         private const val SETTINGS = "settings"
     }
