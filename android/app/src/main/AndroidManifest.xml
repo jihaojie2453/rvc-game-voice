@@ -25,8 +25,7 @@
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:theme="@style/AppTheme">
-        <activity android:name=".VirtualMicScreenActivity" android:exported="false" />
-        <!-- vendor libraries an app must ask for (Android 12+): FastRPC to reach the NPU, OpenCL for the GPU -->
+            <!-- vendor libraries an app must ask for (Android 12+): FastRPC to reach the NPU, OpenCL for the GPU -->
         <uses-native-library android:name="libcdsprpc.so" android:required="false" />
         <uses-native-library android:name="libOpenCL.so" android:required="false" />
         <activity
