@@ -8,6 +8,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- 会话跑起来以后只剩一颗悬浮按钮，App 退到后台 -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <queries>
         <intent>
             <action android:name="android.intent.action.MAIN" />
@@ -31,6 +33,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:excludeFromRecents="true"
             android:screenOrientation="portrait">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -42,5 +45,6 @@
             android:exported="false"
             android:foregroundServiceType="microphone" />
         <activity android:name=".VirtualMicActivity" android:exported="false" />
+        <service android:name=".OverlayService" android:exported="false" />
     </application>
 </manifest>

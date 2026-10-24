@@ -85,8 +85,16 @@ class LiveCore(private val rvc: Rvc, val params: LiveParams) {
     private val gateHold = 48000 * 3 / 10
     private val gateAttack = 1f / (48000 * 5 / 1000)
     private val gateRelease = 1f / (48000 * 50 / 1000)
-    private val threshold = 10.0.pow(params.thresholdDb / 20).toFloat()
+    @Volatile private var threshold = 10.0.pow(params.thresholdDb / 20).toFloat()
     @Volatile var gain = 10.0.pow(params.gainDb / 20).toFloat()
+
+    /** 悬浮窗里改输出音量/静音阈值：下一块立即生效。 */
+    fun applyEngine(key: String, value: Double) {
+        when (key) {
+            "live_gain_db" -> gain = 10.0.pow(value / 20).toFloat()
+            "live_threshold_db" -> threshold = 10.0.pow(value / 20).toFloat()
+        }
+    }
     /** Steps whose output the soft clip had to bend (too loud). */
     var clips = 0
         private set

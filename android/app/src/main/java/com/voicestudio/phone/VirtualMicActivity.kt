@@ -71,6 +71,17 @@ object VirtualMicSession {
     @Volatile private var socket: Socket? = null
     @Volatile private var active = false
     val isActive: Boolean get() = active
+    /** 悬浮窗要热改引擎参数时用；没有会话时为 null。 */
+    @Volatile var core: LiveCore? = null
+    /** 输入增益（线性），读 socket 时逐块乘上，所以可以热改。 */
+    @Volatile var inGain: Float = 1f
+
+    fun applyEngine(key: String, value: Double) {
+        when (key) {
+            "live_input_gain_db" -> inGain = 10.0.pow(value / 20.0).toFloat()
+            else -> core?.applyEngine(key, value)
+        }
+    }
     private val wake = Semaphore(0)
 
     fun stop() {
@@ -160,6 +171,7 @@ object VirtualMicSession {
                 engine = Rvc(File(base,"common"), model, threads, "qnn_htp", dec, "qnn_htp",
                     live=Rvc.LiveShape(block,params.tail,settings.formant,params.window(null)))
                 core = LiveCore(engine, params)
+                VirtualMicSession.core = core
                 val timing = AutoBlock.measure(core, settings) { if (!running) throw InterruptedException() }
                 warmupMaxMs = timing.maximumMs
                 log("BLOCK_CALIBRATION automatic=$autoBlock block_ms=${block*10} steady_ms=${timing.steadyMs}")
@@ -184,6 +196,10 @@ object VirtualMicSession {
                         val fresh = VoiceProfiles.settings(VoiceProfiles.voice(model, profileName))
                         settings = if (Math.abs(fresh.formant - fixedFormant) < 1e-9) fresh
                                    else fresh.copy(formant = fixedFormant)
+                        val eng = VoiceProfiles.engine(model, profileName)
+                        for (k in arrayOf("live_gain_db", "live_threshold_db", "live_input_gain_db")) {
+                            if (eng.has(k)) VirtualMicSession.applyEngine(k, eng.optDouble(k, 0.0))
+                        }
                         log("SETTINGS_APPLIED profile=$profileName pitch=${settings.pitch} formant_fixed=$fixedFormant rms=${settings.rmsMixRate}")
                     }
                 }
@@ -211,7 +227,7 @@ object VirtualMicSession {
             val ring = SampleRing(48000*8)
             val persistent = intent.getBooleanExtra("persistent_mic", false)
             val resetRequested = java.util.concurrent.atomic.AtomicBoolean(false)
-            val gain = 10.0.pow(inputDb/20.0).toFloat()
+            VirtualMicSession.inGain = 10.0.pow(inputDb/20.0).toFloat()
             reader = thread(name="virtual-mic-input") {
                 android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO)
                 try {
@@ -223,7 +239,8 @@ object VirtualMicSession {
                         val bytes = ByteArray(count*2); input.readFully(bytes)
                         val pcm = FloatArray(count) { i -> ((bytes[2*i].toInt() and 255) or (bytes[2*i+1].toInt() shl 8)).toShort()/32768f }
                         raw?.append(pcm)
-                        for (i in pcm.indices) pcm[i] = LiveCore.softClip(pcm[i]*gain)
+                        val g = VirtualMicSession.inGain
+                        for (i in pcm.indices) pcm[i] = LiveCore.softClip(pcm[i]*g)
                         ring.write(pcm); wake.release()
                     }
                 } catch (e: EOFException) { normalEnd = true }
