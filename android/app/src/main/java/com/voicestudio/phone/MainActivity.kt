@@ -1469,7 +1469,9 @@ class MainActivity : Activity() {
         }
         statusRoot?.setTextColor(getColor(if (rootReady) R.color.green else R.color.accent_strong))
         val phase = RootMicController.phase
-        val stream = phase == MicPhase.RUNNING
+        val streaming = VirtualMicSession.lastAudioAt > 0 &&
+            android.os.SystemClock.elapsedRealtime() - VirtualMicSession.lastAudioAt < 1200
+        val stream = phase == MicPhase.RUNNING || streaming
         val failure = RootMicController.error
         statusHeadline?.text = when {
             failure != null -> str(R.string.ui_check_connection)
