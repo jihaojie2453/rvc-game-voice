@@ -102,19 +102,23 @@ class MainActivity : Activity() {
             setSpan(ForegroundColorSpan(getColor(R.color.accent)), 5, 8, 0)
         }
         f<View>(R.id.tab_record).setOnClickListener { showPage(RECORD) }
-        f<View>(R.id.tab_convert).setOnClickListener { showPage(CONVERT) }
+        f<View>(R.id.tab_config).setOnClickListener { showPage(CONFIG) }
         f<View>(R.id.tab_live).setOnClickListener { showPage(LIVE) }
-        f<View>(R.id.gear).setOnClickListener { showPage(if (page == SETTINGS) lastPage else SETTINGS) }
+        f<View>(R.id.tab_setting).setOnClickListener { showPage(SETTINGS) }
+        f<View>(R.id.gear).visibility = View.GONE  // 设置页已有页签，齿轮只留空位
         f<Button>(R.id.settings_close).setOnClickListener { showPage(lastPage) }
         setupRecordPage()
         setupConvertPage()
+        setupConfigPage()
         setupLivePage()
         setupSettingsPage()
         // 0.5.3 的每音色一份 settings.json 与 voice_live:* 先搬成「默认方案」；失败不阻塞启动
         runCatching { VoiceProfiles.migrateIfNeeded(prefs, modelsDir) }
         f<Button>(R.id.get_common).setOnClickListener { toggleCommonDownload() }
         player.onStateChange = { wave, playing -> playButtonFor(wave)?.text = if (playing) "⏸" else "▶" }
-        showPage(prefs.getString("page", null) ?: if (prefs.getBoolean("record_page", true)) RECORD else CONVERT)
+        val saved = prefs.getString("page", null)
+        // 0.5.3 存过 "convert"，那一页已经不在页签里，统一落到「配置」
+        showPage(if (saved == RECORD || saved == LIVE || saved == SETTINGS) saved else CONFIG)
         refreshModels()
         refreshRecordings()
         if (!ready) showPage(SETTINGS)  // first run: models come first
@@ -172,15 +176,21 @@ class MainActivity : Activity() {
         }
         page = which
         if (which != SETTINGS) lastPage = which
-        for ((name, pageId, tabId) in listOf(Triple(RECORD, R.id.page_record, R.id.tab_record),
-                Triple(CONVERT, R.id.page_convert, R.id.tab_convert), Triple(LIVE, R.id.page_live, R.id.tab_live))) {
+        for ((name, pageId, tabId) in listOf(
+            Triple(RECORD, R.id.page_record, R.id.tab_record),
+            Triple(CONFIG, R.id.page_config, R.id.tab_config),
+            Triple(LIVE, R.id.page_live, R.id.tab_live),
+            Triple(SETTINGS, R.id.page_settings, R.id.tab_setting),
+        )) {
             f<View>(pageId).visibility = if (name == which) View.VISIBLE else View.GONE
             f<View>(tabId).isSelected = name == which
         }
-        f<View>(R.id.page_settings).visibility = if (which == SETTINGS) View.VISIBLE else View.GONE
+        // 转换页在 0.5.4 里已从页签移除，暂时只保留「录音」页的旧入口，等参数页做完再删
+        f<View>(R.id.page_convert).visibility = if (which == CONVERT) View.VISIBLE else View.GONE
         if (which != SETTINGS) prefs.edit().putString("page", which).apply() else showCompute()
         f<ScrollView>(R.id.scroll).scrollTo(0, 0)
         if (which == LIVE) { loadLiveSliders(); showLive() }
+        if (which == CONFIG) fillGameRows()
     }
 
     private fun playButtonFor(wave: WaveformView?): Button? = when (wave?.id) {
@@ -188,6 +198,228 @@ class MainActivity : Activity() {
         R.id.in_wave -> f(R.id.in_play)
         R.id.out_wave -> f(R.id.out_play)
         else -> null
+    }
+
+    // ---------------------------------------------------------------- config page (game -> voice -> profile)
+
+    /** 配置页里列出「已添加的游戏」的容器；绑定变化后只重画这一块。 */
+    private var configRows: LinearLayout? = null
+
+    private fun setupConfigPage() {
+        val page = f<LinearLayout>(R.id.page_config)
+        page.removeAllViews()
+        val games = card(page)
+        games.addView(TextView(this).apply {
+            text = str(R.string.ui_game_voice_title); textSize = 17f
+            typeface = Typeface.create("sans-serif", Typeface.BOLD); setTextColor(getColor(R.color.text))
+        })
+        games.addView(TextView(this).apply {
+            text = str(R.string.ui_game_voice_help); textSize = 12f
+            setTextColor(getColor(R.color.muted)); setPadding(0, dp(6), 0, dp(8))
+        })
+        val rows = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        games.addView(rows)
+        games.addView(Button(this, null, 0, R.style.SoftButton).apply {
+            text = str(R.string.ui_add_game)
+            layoutParams = LinearLayout.LayoutParams(-1, dp(46)).apply { topMargin = dp(10) }
+            setOnClickListener { chooseGameToAdd() }
+        })
+        configRows = rows
+        fillGameRows()
+    }
+
+    /** 每个游戏一行：应用名 + 当前音色·方案 + 包名，点进去改。 */
+    private fun fillGameRows() {
+        val rows = configRows ?: return
+        rows.removeAllViews()
+        val games = GameBinding.games(prefs)
+        if (games.isEmpty()) {
+            rows.addView(TextView(this).apply {
+                text = str(R.string.ui_no_games_yet); textSize = 12f
+                setTextColor(getColor(R.color.muted)); setPadding(0, dp(6), 0, dp(6))
+            })
+            return
+        }
+        val pm = packageManager
+        for (pkg in games) {
+            val bound = GameBinding.get(prefs, pkg)
+            val name = runCatching { pm.getApplicationInfo(pkg, 0).loadLabel(pm).toString() }.getOrDefault(pkg)
+            val line = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, dp(10), 0, dp(10))
+                setOnClickListener { showGameSetup(pkg) }
+            }
+            line.addView(TextView(this).apply {
+                text = name; textSize = 15f
+                setTypeface(typeface, Typeface.BOLD); setTextColor(getColor(R.color.text))
+            })
+            line.addView(TextView(this).apply {
+                text = if (bound == null) str(R.string.ui_game_voice_unbound)
+                else "${bound.model} · ${bound.profile}"
+                textSize = 12f; setTextColor(getColor(R.color.accent_strong))
+            })
+            line.addView(TextView(this).apply {
+                text = pkg; textSize = 10f; setTextColor(getColor(R.color.muted))
+            })
+            rows.addView(line)
+        }
+    }
+
+    /** 「添加游戏」：列出所有有启动图标的已安装应用（manifest 里已声明 LAUNCHER 查询）。 */
+    private fun chooseGameToAdd() {
+        val pm = packageManager
+        val found = LinkedHashMap<String, String>()
+        val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        for (info in pm.queryIntentActivities(launcher, 0)) {
+            val pkg = info.activityInfo.packageName
+            if (pkg == packageName) continue
+            found.getOrPut(pkg) { info.loadLabel(pm).toString() }
+        }
+        val apps = found.entries.map { it.value to it.key }.sortedBy { it.first.lowercase() }
+        if (apps.isEmpty()) { toast(str(R.string.ui_loading_the_app_list_try_again_in)); return }
+        val labels = apps.map { "${it.first}　·　${it.second}" }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle(str(R.string.ui_add_game))
+            .setItems(labels) { _, which -> addGame(apps[which].second) }
+            .setNegativeButton(str(R.string.ui_close), null)
+            .show()
+    }
+
+    /** 新加的游戏先绑「第一个音色的第一个方案」，随后立刻打开配置页改。 */
+    private fun addGame(pkg: String) {
+        val model = models.firstOrNull()
+        if (model == null) { toast(str(R.string.ui_add_a_model_first)); return }
+        val profile = VoiceProfiles.list(model).firstOrNull() ?: VoiceProfiles.DEFAULT
+        GameBinding.bind(prefs, pkg, model.name, profile)
+        fillGameRows()
+        showGameSetup(pkg)
+    }
+
+    /** 游戏配置：选音色、管方案（新建 / 重命名 / 删除），保存后这个游戏一直沿用。
+     *  音色与方案都改成"显式读写"，不用 Spinner 的选中回调——回调在重建适配器时会把选择改回第一项。 */
+    private fun showGameSetup(pkg: String, forcedModel: Int? = null) {
+        if (models.isEmpty()) { toast(str(R.string.ui_add_a_model_first)); return }
+        val bound = GameBinding.get(prefs, pkg)
+        val modelIndex = (forcedModel ?: models.indexOfFirst { it.name == bound?.model }).coerceIn(0, models.size - 1)
+        val dir = models[modelIndex]
+        val startFrom = if (forcedModel == null && bound?.model == dir.name) bound?.profile else null
+        val pm = packageManager
+        val appName = runCatching { pm.getApplicationInfo(pkg, 0).loadLabel(pm).toString() }.getOrDefault(pkg)
+
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), dp(8))
+        }
+        fun caption(text: String) = TextView(this).apply {
+            this.text = text; textSize = 12f
+            setTextColor(getColor(R.color.muted)); setPadding(0, dp(10), 0, dp(2))
+        }
+        body.addView(caption(str(R.string.ui_voice_of)))
+        val voiceRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+        }
+        voiceRow.addView(TextView(this).apply {
+            text = dir.name; textSize = 16f
+            setTypeface(typeface, Typeface.BOLD); setTextColor(getColor(R.color.text))
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        voiceRow.addView(Button(this, null, 0, R.style.SoftButton).apply {
+            text = str(R.string.ui_change); textSize = 12f
+            setOnClickListener {
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle(str(R.string.ui_voice_of))
+                    .setItems(models.map { it.name }.toTypedArray()) { _, which -> showGameSetup(pkg, which) }
+                    .setNegativeButton(str(R.string.ui_cancel), null)
+                    .show()
+            }
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(40)))
+        body.addView(voiceRow)
+
+        body.addView(caption(str(R.string.ui_profiles)))
+        val profileSpinner = Spinner(this)
+        fun refresh(preferName: String?) {
+            val names = VoiceProfiles.list(dir)
+            profileSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, names)
+                .apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+            val index = names.indexOf(preferName ?: "")
+            profileSpinner.setSelection(if (index >= 0) index else 0)
+        }
+        fun picked(): String {
+            val names = VoiceProfiles.list(dir)
+            return names.getOrNull(profileSpinner.selectedItemPosition) ?: names.firstOrNull() ?: VoiceProfiles.DEFAULT
+        }
+        refresh(startFrom)
+        body.addView(profileSpinner)
+
+        val ops = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(10), 0, 0)
+        }
+        fun op(text: String, action: () -> Unit) = Button(this, null, 0, R.style.SoftButton).apply {
+            this.text = text; textSize = 12f
+            setOnClickListener { action() }
+        }
+        // 「默认」方案是只读基线：不能改名、不能删除、参数也不能改；只有自己新建的方案可操作。
+        fun syncOps() {
+            val readOnly = picked() == VoiceProfiles.DEFAULT
+            for (i in 1 until ops.childCount) ops.getChildAt(i).isEnabled = !readOnly
+        }
+        ops.addView(op(str(R.string.ui_new_profile)) {
+            val base = picked()
+            askProfileName(str(R.string.ui_new_profile), "") { name ->
+                // 新方案以当前方案为起点，一新建就跳回出厂音高会让人以为坏了
+                if (VoiceProfiles.create(dir, name, VoiceProfiles.read(dir, base))) { refresh(name); syncOps() }
+                else toast(str(R.string.ui_could_not_save, name))
+            }
+        }, LinearLayout.LayoutParams(0, dp(42), 1f))
+        ops.addView(op(str(R.string.ui_rename)) {
+            val old = picked()
+            if (old == VoiceProfiles.DEFAULT) toast(str(R.string.ui_default_profile_locked))
+            else askProfileName(str(R.string.ui_rename), old) { name ->
+                if (VoiceProfiles.rename(dir, old, name)) { refresh(name); syncOps() }
+                else toast(str(R.string.ui_could_not_save, name))
+            }
+        }, LinearLayout.LayoutParams(0, dp(42), 1f))
+        ops.addView(op(str(R.string.ui_delete)) {
+            val victim = picked()
+            if (victim == VoiceProfiles.DEFAULT) toast(str(R.string.ui_default_profile_locked))
+            else AlertDialog.Builder(this)
+                .setMessage(victim)
+                .setPositiveButton(str(R.string.ui_delete)) { _, _ ->
+                    if (VoiceProfiles.delete(dir, victim)) { refresh(null); syncOps() }
+                    else toast(str(R.string.ui_could_not_save, victim))
+                }
+                .setNegativeButton(str(R.string.ui_cancel), null)
+                .show()
+        }, LinearLayout.LayoutParams(0, dp(42), 1f))
+        body.addView(ops)
+        profileSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) = syncOps()
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+        syncOps()
+
+        AlertDialog.Builder(this)
+            .setTitle("${str(R.string.ui_game_setup)} · $appName")
+            .setView(ScrollView(this).apply { addView(body) })
+            .setPositiveButton(str(R.string.ui_save)) { _, _ ->
+                GameBinding.bind(prefs, pkg, dir.name, picked())
+                fillGameRows()
+                updateGameVoiceSummary()
+            }
+            .setNegativeButton(str(R.string.ui_cancel), null)
+            .show()
+    }
+    private fun askProfileName(title: String, initial: String, onOk: (String) -> Unit) {
+        val input = EditText(this).apply {
+            setText(initial); setSingleLine(); setSelection(text.length)
+            hint = str(R.string.ui_profile_name)
+        }
+        val pad = LinearLayout(this).apply { setPadding(dp(20), dp(8), dp(20), dp(8)) }
+        pad.addView(input)
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setView(pad)
+            .setPositiveButton(str(R.string.ui_save)) { _, _ -> onOk(input.text.toString().trim()) }
+            .setNegativeButton(str(R.string.ui_cancel), null)
+            .show()
     }
 
     // ---------------------------------------------------------------- record page
@@ -1506,6 +1738,7 @@ class MainActivity : Activity() {
         private const val LIVE_MIC = 5
         private const val W8A16 = "model.dec.w8a16.onnx"
         private const val RECORD = "record"
+        private const val CONFIG = "config"
         private const val CONVERT = "convert"
         private const val LIVE = "live"
         private const val SETTINGS = "settings"

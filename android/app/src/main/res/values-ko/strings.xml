@@ -367,4 +367,17 @@
     <string name="ui_apply_restart">적용하고 다시 시작</string>
     <string name="ui_restart_after_stopping">마이크가 완전히 꺼진 뒤 다시 켜주세요.</string>
     <string name="ui_live_per_voice_help">출력 크기와 실시간 설정은 목소리별로 저장되며, 같은 목소리의 가상 마이크 설정과 공유해요.</string>
+    <string name="ui_config">구성</string>
+    <string name="ui_status">상태</string>
+    <string name="ui_general">일반</string>
+    <string name="ui_add_game">게임 추가</string>
+    <string name="ui_no_games_yet">아직 게임이 없습니다. “게임 추가”를 눌러 시작하세요.</string>
+    <string name="ui_profiles">프로필</string>
+    <string name="ui_new_profile">새 프로필</string>
+    <string name="ui_profile_name">프로필 이름</string>
+    <string name="ui_duplicate">복제</string>
+    <string name="ui_rename">이름 바꾸기</string>
+    <string name="ui_game_setup">게임 설정</string>
+    <string name="ui_edit_next_build">파라미터 편집은 다음 빌드에서 제공됩니다.</string>
+    <string name="ui_voice_of">목소리</string>    <string name="ui_default_profile_locked">기본 프로필은 읽기 전용입니다. 새 프로필을 만들어 조정하세요.</string>
 </resources>
