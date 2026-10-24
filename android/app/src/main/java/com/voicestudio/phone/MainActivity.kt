@@ -110,6 +110,8 @@ class MainActivity : Activity() {
         setupConvertPage()
         setupLivePage()
         setupSettingsPage()
+        // 0.5.3 的每音色一份 settings.json 与 voice_live:* 先搬成「默认方案」；失败不阻塞启动
+        runCatching { VoiceProfiles.migrateIfNeeded(prefs, modelsDir) }
         f<Button>(R.id.get_common).setOnClickListener { toggleCommonDownload() }
         player.onStateChange = { wave, playing -> playButtonFor(wave)?.text = if (playing) "⏸" else "▶" }
         showPage(prefs.getString("page", null) ?: if (prefs.getBoolean("record_page", true)) RECORD else CONVERT)
