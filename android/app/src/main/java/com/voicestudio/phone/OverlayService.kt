@@ -184,12 +184,21 @@ class OverlayService : Service() {
             setParam(VoiceProfiles.GROUP_ENGINE, "live_threshold_db", v)
         }
 
+        val actions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) }
+        }
+        val restart = Button(this, null, 0, R.style.SoftButton).apply {
+            text = str(R.string.ui_overlay_restart); textSize = 12f
+            setOnClickListener { restartSession() }
+        }
+        actions.addView(restart, LinearLayout.LayoutParams(0, dp(42), 1.15f))
         val quit = Button(this, null, 0, R.style.SoftButton).apply {
-            text = str(R.string.ui_overlay_quit); textSize = 13f
-            layoutParams = LinearLayout.LayoutParams(-1, dp(42)).apply { topMargin = dp(10) }
+            text = str(R.string.ui_overlay_quit); textSize = 12f
             setOnClickListener { quitEverything() }
         }
-        body.addView(quit)
+        actions.addView(quit, LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginStart = dp(8) })
+        body.addView(actions)
         drag(title)
 
         column.addView(body, LinearLayout.LayoutParams(dp(268), -2).apply { topMargin = dp(8) })
@@ -320,7 +329,9 @@ class OverlayService : Service() {
             return
         }
         val phase = RootMicController.phase
-        val live = phase == MicPhase.RUNNING
+        val streaming = VirtualMicSession.lastAudioAt > 0 &&
+            android.os.SystemClock.elapsedRealtime() - VirtualMicSession.lastAudioAt < 1200
+        val live = phase == MicPhase.RUNNING || streaming
         dot?.background = circle(if (live) green else red, dp(20))
         (collapsed?.getChildAt(1) as? TextView)?.text = when {
             switching?.visibility == View.VISIBLE -> str(R.string.ui_overlay_switching)
@@ -443,6 +454,18 @@ class OverlayService : Service() {
         prefs.edit().putString("model", model).apply()
         switching?.apply { text = str(R.string.ui_overlay_switching); visibility = View.VISIBLE }
         // 换音色必须重建引擎：先停会话，等桥接退出后再用新模型拉起
+        RootMicController.stop()
+        ui.postDelayed({
+            RootMicController.start(applicationContext, pkg, model)
+            ui.postDelayed({ switching?.visibility = View.GONE }, 1200)
+        }, 1500)
+    }
+
+    /** 改完共振峰/高级参数后点一下：重建会话（期间保持红色）。 */
+    private fun restartSession() {
+        val pkg = prefs.getString("status_game", null) ?: return
+        val model = bound?.model ?: prefs.getString("model", null) ?: return
+        switching?.apply { text = str(R.string.ui_overlay_switching); visibility = View.VISIBLE }
         RootMicController.stop()
         ui.postDelayed({
             RootMicController.start(applicationContext, pkg, model)

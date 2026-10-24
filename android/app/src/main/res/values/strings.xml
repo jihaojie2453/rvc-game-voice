@@ -430,4 +430,5 @@
     <string name="ui_overlay_switching">Switching…</string>
     <string name="ui_overlay_quit">Quit</string>
     <string name="ui_overlay_permission">Allow "display over other apps" to keep the mic button on screen</string>
+    <string name="ui_overlay_restart">Restart</string>
 </resources>

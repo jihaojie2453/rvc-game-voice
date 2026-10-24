@@ -76,6 +76,12 @@ object VirtualMicSession {
     /** 输入增益（线性），读 socket 时逐块乘上，所以可以热改。 */
     @Volatile var inGain: Float = 1f
 
+    /** 最后一次真正产生音频的 elapsedRealtime；用来判断“是不是真的在变声”。 */
+    @Volatile var lastAudioAt = 0L
+        private set
+
+    fun noteAudio() { lastAudioAt = android.os.SystemClock.elapsedRealtime() }
+
     fun applyEngine(key: String, value: Double) {
         when (key) {
             "live_input_gain_db" -> inGain = 10.0.pow(value / 20.0).toFloat()
@@ -289,6 +295,7 @@ object VirtualMicSession {
                             continue
                         }
                         meter = Meter(core.lastInPeak, core.lastRawPeak, ms, drops)
+                        VirtualMicSession.noteAudio()
                         if (!running) break
                         val pcm = ByteArray(y.size*2)
                         for (i in y.indices) {
