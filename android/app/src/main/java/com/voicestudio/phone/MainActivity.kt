@@ -1379,6 +1379,7 @@ class MainActivity : Activity() {
             setOnClickListener {
                 if (RootMicController.active || VirtualMicSession.isActive) {
                     RootMicController.stop()
+                    OverlayService.stop(this@MainActivity)
                     stopService(Intent(this@MainActivity, LiveService::class.java))
                     renderStatusState()
                     return@setOnClickListener
@@ -1521,11 +1522,31 @@ class MainActivity : Activity() {
         try {
             startForegroundService(Intent(this, LiveService::class.java).putExtra("virtual_mic", true))
             RootMicController.start(applicationContext, pkg, modelName)
+            showOverlayAndHide()
         } catch (e: Throwable) {
             toast(e.message ?: str(R.string.ui_could_not_start_2))
             stopService(Intent(this, LiveService::class.java))
         }
         renderStatusState()
+    }
+
+    /**
+     * 会话起来以后：有悬浮窗权限就退到后台只留悬浮按钮；没有就请求权限（这次先留在 App 里）。
+     */
+    private fun showOverlayAndHide() {
+        if (!OverlayService.canDraw(this)) {
+            toast(str(R.string.ui_overlay_permission))
+            runCatching {
+                startActivity(Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    android.net.Uri.parse("package:$packageName")))
+            }
+            return
+        }
+        OverlayService.start(this)
+        ui.postDelayed({
+            runCatching { moveTaskToBack(true) }   // MIUI 上 finishAndRemoveTask 不一定把任务挪走
+            runCatching { finishAndRemoveTask() }
+        }, 900)
     }
 
 

@@ -424,4 +424,11 @@
     <string name="ui_saved_restart_mic">已保存。高级设置需重启虚拟麦后生效。</string>
     <string name="ui_listen">试听</string>
     <string name="ui_listen_stop">停止试听</string>
+    <string name="ui_overlay_voice">音色</string>
+    <string name="ui_overlay_profile">方案</string>
+    <string name="ui_overlay_live">变声中</string>
+    <string name="ui_overlay_waiting">等待麦克风</string>
+    <string name="ui_overlay_switching">切换中…</string>
+    <string name="ui_overlay_quit">退出应用</string>
+    <string name="ui_overlay_permission">请允许「显示在其他应用上层」，这样才能保留悬浮麦克风按钮</string>
 </resources>
