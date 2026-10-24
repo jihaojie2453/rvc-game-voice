@@ -1266,8 +1266,19 @@ class MainActivity : Activity() {
     // ---------------------------------------------------------------- status page (game -> voice -> profile -> start)
 
     private var statusBody: LinearLayout? = null
-    private var statusState: TextView? = null
     private var statusButton: Button? = null
+    private var statusRoot: TextView? = null
+    private var statusHeadline: TextView? = null
+    private var statusDetail: TextView? = null
+    private var statusTimer: TextView? = null
+    private var statusInBar: ProgressBar? = null
+    private var statusOutBar: ProgressBar? = null
+    private var statusInValue: TextView? = null
+    private var statusOutValue: TextView? = null
+    private var statusMetrics: TextView? = null
+    @Volatile private var rootReady = false
+    @Volatile private var rootChecked = false
+    private var rootChecking = false
     private val statusTicker = object : Runnable {
         override fun run() { renderStatusState(); ui.postDelayed(this, 500) }
     }
@@ -1322,7 +1333,7 @@ class MainActivity : Activity() {
                 layoutParams = LinearLayout.LayoutParams(-1, dp(46))
                 setOnClickListener { showPage(CONFIG) }
             })
-            statusButton = null; statusState = null
+            statusButton = null
             return
         }
         val pkg = prefs.getString("status_game", null)?.takeIf { it in games } ?: games.first()
@@ -1383,26 +1394,118 @@ class MainActivity : Activity() {
         body.addView(button)
         statusButton = button
 
-        val state = TextView(this).apply {
-            textSize = 12f; setTextColor(getColor(R.color.text))
-            setPadding(0, dp(10), 0, 0); setLineSpacing(dp(3).toFloat(), 1f)
+        // 就绪状态（搬自原来的「管理游戏音色」页）
+        statusRoot = TextView(this).apply {
+            textSize = 12f; setTextColor(getColor(R.color.muted)); setPadding(0, dp(12), 0, 0)
         }
-        body.addView(state)
-        statusState = state
+        body.addView(statusRoot)
+        statusHeadline = TextView(this).apply {
+            textSize = 15f; setTypeface(typeface, Typeface.BOLD)
+            setTextColor(getColor(R.color.text)); setPadding(0, dp(4), 0, 0)
+        }
+        body.addView(statusHeadline)
+        statusDetail = TextView(this).apply {
+            textSize = 11f; setTextColor(getColor(R.color.muted)); setLineSpacing(dp(2).toFloat(), 1f)
+        }
+        body.addView(statusDetail)
+        statusTimer = TextView(this).apply {
+            textSize = 13f; typeface = Typeface.MONOSPACE
+            setTextColor(getColor(R.color.accent_strong)); setPadding(0, dp(6), 0, 0)
+        }
+        body.addView(statusTimer)
 
-        body.addView(Button(this, null, 0, R.style.SoftButton).apply {
-            text = str(R.string.ui_manage_game_voices); textSize = 12f
-            layoutParams = LinearLayout.LayoutParams(-1, dp(42)).apply { topMargin = dp(8) }
-            setOnClickListener { startActivity(Intent(this@MainActivity, VirtualMicScreenActivity::class.java)) }
-        })
+        // 实时参数（电平 + 处理耗时）
+        fun levelRow(label: String, onBar: (ProgressBar) -> Unit, onValue: (TextView) -> Unit) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(8), 0, 0)
+            }
+            row.addView(TextView(this).apply {
+                text = label; textSize = 12f; setTextColor(getColor(R.color.muted))
+            }, LinearLayout.LayoutParams(dp(80), ViewGroup.LayoutParams.WRAP_CONTENT))
+            val bar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { max = 100 }
+            row.addView(bar, LinearLayout.LayoutParams(0, dp(12), 1f).apply { marginEnd = dp(10) })
+            val value = TextView(this).apply {
+                text = "—"; textSize = 12f; typeface = Typeface.MONOSPACE
+                setTextColor(getColor(R.color.text)); gravity = Gravity.END
+            }
+            row.addView(value, LinearLayout.LayoutParams(dp(58), ViewGroup.LayoutParams.WRAP_CONTENT))
+            body.addView(row)
+            onBar(bar); onValue(value)
+        }
+        levelRow(str(R.string.ui_mic_input), { statusInBar = it }, { statusInValue = it })
+        levelRow(str(R.string.ui_converted_output), { statusOutBar = it }, { statusOutValue = it })
+        statusMetrics = TextView(this).apply {
+            textSize = 11f; setTextColor(getColor(R.color.muted))
+            setPadding(0, dp(8), 0, 0); setLineSpacing(dp(2).toFloat(), 1f)
+        }
+        body.addView(statusMetrics)
         renderStatusState()
+        checkRootStatus()
     }
 
+    /** 后台探一次 root（su -c id 最长 6 秒），结果给状态页用。 */
+    private fun checkRootStatus() {
+        if (rootChecking) return
+        rootChecking = true
+        thread {
+            val ok = RootMicController.checkRoot(force = true)
+            ui.post {
+                rootReady = ok; rootChecked = true; rootChecking = false
+                renderStatusState()
+            }
+        }
+    }
+
+    /** 状态页：就绪状态 + 阶段 + 实时电平与处理耗时（原「管理游戏音色」页的内容）。 */
     private fun renderStatusState() {
-        val state = statusState ?: return
         val running = RootMicController.active || VirtualMicSession.isActive
         statusButton?.text = str(if (running) R.string.ui_stop_virtual_mic else R.string.ui_start_virtual_mic)
-        state.text = if (running) RootMicController.status else str(R.string.ui_virtual_microphone_is_off)
+        statusRoot?.text = when {
+            rootReady -> str(R.string.ui_root_granted)
+            rootChecked -> str(R.string.ui_root_required)
+            else -> str(R.string.ui_root_checking)
+        }
+        statusRoot?.setTextColor(getColor(if (rootReady) R.color.green else R.color.accent_strong))
+        val phase = RootMicController.phase
+        val stream = phase == MicPhase.RUNNING
+        val failure = RootMicController.error
+        statusHeadline?.text = when {
+            failure != null -> str(R.string.ui_check_connection)
+            phase == MicPhase.SILENT -> str(R.string.ui_model_failed_silent_title)
+            phase == MicPhase.STOPPING -> str(R.string.ui_stopping_the_microphone)
+            phase == MicPhase.BUFFERING -> str(R.string.ui_preparing_audio)
+            stream -> str(R.string.ui_sending_your_voice)
+            phase == MicPhase.WAITING -> str(R.string.ui_waiting_for_microphone_input)
+            running -> str(R.string.ui_preparing_your_voice)
+            rootChecked && !rootReady -> str(R.string.ui_root_required)
+            else -> str(R.string.ui_virtual_microphone_is_off)
+        }
+        statusDetail?.text = when {
+            failure != null -> failure.takeLast(200)
+            phase == MicPhase.SILENT -> str(R.string.ui_model_failed_silent_detail)
+            phase == MicPhase.STOPPING -> str(R.string.ui_restoring_the_original_microphone_2)
+            phase == MicPhase.BUFFERING -> str(R.string.ui_audio_resumes_when_converted_sound_is_ready)
+            stream -> str(R.string.ui_sending_converted_input_to_apps_using_the)
+            phase == MicPhase.WAITING -> str(R.string.ui_waiting_without_a_time_limit_start_a)
+            running -> str(R.string.ui_loading_the_selected_voice_please_wait)
+            rootChecked && !rootReady -> str(R.string.ui_root_required_detail)
+            else -> str(R.string.ui_choose_an_app_and_voice_then_turn)
+        }
+        val seconds = if (RootMicController.active)
+            (android.os.SystemClock.elapsedRealtime() - RootMicController.startedAt) / 1000 else 0L
+        statusTimer?.text = if (RootMicController.active) String.format(Locale.US, "%02d:%02d", seconds / 60, seconds % 60) else ""
+        statusTimer?.visibility = if (RootMicController.active) View.VISIBLE else View.GONE
+        val meter = if (stream) VirtualMicSession.meter else VirtualMicSession.Meter()
+        fun showLevel(value: Float, bar: ProgressBar?, label: TextView?) {
+            val db = if (value > 0) (20 * Math.log10(value.toDouble())).coerceIn(-60.0, 0.0) else -60.0
+            bar?.progress = ((db + 60) / 60 * 100).toInt()
+            label?.text = if (value > 0) "${db.toInt()} dB" else "—"
+        }
+        showLevel(meter.input, statusInBar, statusInValue)
+        showLevel(meter.output, statusOutBar, statusOutValue)
+        statusMetrics?.text = str(R.string.ui_processing_ms_ms_block_skipped_inputs_capture, meter.computeMs.toInt(), meter.drops)
+        statusMetrics?.visibility = if (stream) View.VISIBLE else View.GONE
     }
 
     /** 和虚拟麦页面相同的启动顺序：先拿权限，再起前台服务，最后交给 root 控制器。 */

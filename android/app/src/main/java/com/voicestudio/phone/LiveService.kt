@@ -100,7 +100,7 @@ class LiveService : Service() {
         if (!foreground && signature == lastContent) return
         lastContent = signature
         val open = PendingIntent.getActivity(this, if (virtual) 2 else 0,
-            Intent(this, if (virtual) VirtualMicScreenActivity::class.java else MainActivity::class.java)
+            Intent(this, MainActivity::class.java)
                 .setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val stop = PendingIntent.getService(this, 1, Intent(this, LiveService::class.java).setAction(STOP), PendingIntent.FLAG_IMMUTABLE)
         val builder = Notification.Builder(this, CHANNEL)
