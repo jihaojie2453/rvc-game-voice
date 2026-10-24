@@ -346,12 +346,14 @@ class OverlayService : Service() {
         }
         idleSince = 0L
         val phase = RootMicController.phase
+        // 绿 = 最近 2.5 秒里真的有人在说话。phase == RUNNING 只代表桥接通道已连接：游戏占着麦克风时
+        // 一直静音也会是 RUNNING，拿它兜底就会「没说话也一直显示变声中」。
         val streaming = VirtualMicSession.lastAudioAt > 0 &&
-            android.os.SystemClock.elapsedRealtime() - VirtualMicSession.lastAudioAt < 1200
-        val live = phase == MicPhase.RUNNING || streaming
+            android.os.SystemClock.elapsedRealtime() - VirtualMicSession.lastAudioAt < 2500
+        val live = streaming
         if (android.os.SystemClock.elapsedRealtime() - lastTrace > 2000) {
             lastTrace = android.os.SystemClock.elapsedRealtime()
-            android.util.Log.i("VoiceStudio", "OVERLAY live=$live streaming=$streaming phase=$phase lastAudio=${VirtualMicSession.lastAudioAt} active=${RootMicController.active}")
+            android.util.Log.i("VoiceStudio", "OVERLAY live=$live streaming=$streaming phase=$phase lastAudio=${VirtualMicSession.lastAudioAt} inPeak=${VirtualMicSession.meter.input} active=${RootMicController.active}")
         }
         dot?.background = circle(if (live) green else red, dp(20))
         // 只有「改了必须重启才生效」的参数时才点亮重开会话，否则灰着
@@ -363,6 +365,7 @@ class OverlayService : Service() {
             live -> str(R.string.ui_overlay_live)
             phase == MicPhase.WAITING -> str(R.string.ui_overlay_waiting)
             phase == MicPhase.BUFFERING -> str(R.string.ui_preparing_audio)
+            phase == MicPhase.RUNNING -> str(R.string.ui_overlay_connected)
             phase == MicPhase.SILENT -> str(R.string.ui_model_failed_silent_title)
             RootMicController.error != null -> str(R.string.ui_check_connection)
             else -> str(R.string.ui_preparing_your_voice)

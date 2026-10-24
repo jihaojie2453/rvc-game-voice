@@ -427,6 +427,7 @@
     <string name="ui_overlay_profile">Profile</string>
     <string name="ui_overlay_live">Live</string>
     <string name="ui_overlay_waiting">Waiting</string>
+    <string name="ui_overlay_connected">Connected · waiting for your voice</string>
     <string name="ui_overlay_switching">Switching…</string>
     <string name="ui_overlay_quit">Quit</string>
     <string name="ui_overlay_permission">Allow "display over other apps" to keep the mic button on screen</string>
