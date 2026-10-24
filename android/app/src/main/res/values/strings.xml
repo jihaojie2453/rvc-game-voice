@@ -412,4 +412,13 @@
     <string name="ui_game_setup">Game setup</string>
     <string name="ui_edit_next_build">Parameter editing arrives in the next build.</string>
     <string name="ui_voice_of">Voice</string>    <string name="ui_default_profile_locked">The default profile is read-only. Create your own profile to tune it.</string>
+    <string name="ui_edit_params">Edit parameters</string>
+    <string name="ui_voice_params">Voice</string>
+    <string name="ui_model_settings">Model</string>
+    <string name="ui_restart_mic_hint">Saved settings apply the next time the virtual mic starts. Formant, advanced and model settings always need a restart.</string>
+    <string name="ui_follow_global">Follow general</string>
+    <string name="ui_auto">Auto</string>
+    <string name="ui_decoder_whole">Whole decoder</string>
+    <string name="ui_decoder_split">Split decoder</string>
+    <string name="ui_saved_restart_mic">Saved. Restart the virtual mic to hear the advanced settings.</string>
 </resources>
