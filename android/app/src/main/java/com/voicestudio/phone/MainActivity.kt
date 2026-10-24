@@ -528,19 +528,23 @@ class MainActivity : Activity() {
             })
         }
         fun numOf(json: JSONObject, key: String, def: Double) = if (json.has(key)) json.optDouble(key, def) else def
-        fun param(json: JSONObject, key: String, label: String, min: Double, max: Double, step: Double, def: Double, unit: String) {
+        // 显示值 = 存储值 × scale：界面上给客户看得懂的单位（秒 / dB / Hz / 倍），
+        // 存储仍然是引擎原始单位（10 ms 帧、厘秒、dB）。
+        fun param(json: JSONObject, key: String, label: String, minD: Double, maxD: Double, stepD: Double,
+                  defD: Double, scale: Double, fmt: (Double) -> String) {
+            fun stored() = numOf(json, key, defD / scale)
             val value = TextView(this).apply {
                 textSize = 12f; typeface = Typeface.MONOSPACE
                 setTextColor(getColor(R.color.accent_strong))
-                text = format(numOf(json, key, def), step) + unit
+                text = fmt(stored() * scale)
             }
-            val steps = ((max - min) / step).roundToInt().coerceAtLeast(1)
-            val bar = sliderRow(body, label, value, format(min, step), format(max, step), steps)
-            bar.progress = ((numOf(json, key, def) - min) / step).roundToInt().coerceIn(0, steps)
+            val steps = ((maxD - minD) / stepD).roundToInt().coerceAtLeast(1)
+            val bar = sliderRow(body, label, value, fmt(minD), fmt(maxD), steps)
+            bar.progress = ((stored() * scale - minD) / stepD).roundToInt().coerceIn(0, steps)
             bar.setOnSeekBarChangeListener(slider { p, done ->
-                val v = min + p * step
-                value.text = format(v, step) + unit
-                if (done) { json.put(key, v); listenApply(VoiceProfiles.settings(voice)) }
+                val display = minD + p * stepD
+                value.text = fmt(display)
+                if (done) { json.put(key, display / scale); listenApply(VoiceProfiles.settings(voice)) }
             })
         }
         fun switchParam(json: JSONObject, key: String, label: String, def: Boolean) {
@@ -556,27 +560,34 @@ class MainActivity : Activity() {
             row.addView(sw)
             body.addView(row)
         }
+        fun seconds(v: Double) = str(R.string.ui_s, v)
+        fun db(v: Double) = String.format(Locale.US, "%+.0f dB", v)
+        fun times(v: Double) = String.format(Locale.US, "%.2f×", v)
+        fun hz(v: Double) = String.format(Locale.US, "%.0f Hz", v)
+        fun semitones(v: Double) = if (v == 0.0) str(R.string.ui_semitones) else String.format(Locale.US, str(R.string.ui_semitones_2), v.roundToInt())
 
         heading(str(R.string.ui_voice_params))
-        param(voice, "pitch", str(R.string.ui_pitch_relative_to_your_voice), -24.0, 24.0, 1.0, 0.0, "")
-        param(voice, "formant", str(R.string.ui_formant_voice_texture), -2.0, 2.0, 0.1, 0.0, "")
-        param(voice, "low_pitch_ratio", str(R.string.ui_low_pitch_protection_strength), 1.0, 3.0, 0.1, 1.0, "×")
-        param(voice, "low_pitch_knee", str(R.string.ui_low_pitch_protection_threshold), 60.0, 200.0, 5.0, 120.0, " Hz")
-        param(voice, "high_pitch_ratio", str(R.string.ui_high_pitch_protection_strength), 1.0, 3.0, 0.1, 1.0, "×")
-        param(voice, "high_pitch_knee", str(R.string.ui_high_pitch_protection_threshold), 200.0, 600.0, 10.0, 260.0, " Hz")
-        param(voice, "intonation_ratio", str(R.string.ui_intonation_expansion_strength), 1.0, 1.5, 0.05, 1.15, "×")
-        param(voice, "rms_mix_rate", str(R.string.ui_volume_envelope), 0.0, 1.0, 0.05, 0.0, "")
+        param(voice, "pitch", str(R.string.ui_pitch_relative_to_your_voice), -24.0, 24.0, 1.0, 0.0, 1.0, { semitones(it) })
+        param(voice, "formant", str(R.string.ui_formant_voice_texture), -2.0, 2.0, 0.1, 0.0, 1.0,
+            { String.format(Locale.US, "%+.1f", it) })
+        param(voice, "low_pitch_ratio", str(R.string.ui_low_pitch_protection_strength), 1.0, 3.0, 0.1, 1.0, 1.0, { times(it) })
+        param(voice, "low_pitch_knee", str(R.string.ui_low_pitch_protection_threshold), 60.0, 200.0, 1.0, 120.0, 1.0, { hz(it) })
+        param(voice, "high_pitch_ratio", str(R.string.ui_high_pitch_protection_strength), 1.0, 3.0, 0.1, 1.0, 1.0, { times(it) })
+        param(voice, "high_pitch_knee", str(R.string.ui_high_pitch_protection_threshold), 200.0, 600.0, 5.0, 260.0, 1.0, { hz(it) })
+        param(voice, "intonation_ratio", str(R.string.ui_intonation_expansion_strength), 1.0, 1.5, 0.05, 1.15, 1.0, { times(it) })
+        param(voice, "rms_mix_rate", str(R.string.ui_volume_envelope), 0.0, 1.0, 0.05, 0.0, 1.0,
+            { String.format(Locale.US, "%.2f", it) })
         switchParam(voice, "unvoiced_keep", str(R.string.ui_preserve_breath_and_consonants), true)
         switchParam(voice, "intonation_expand", str(R.string.ui_expand_intonation), false)
 
         heading(str(R.string.ui_advanced_settings), str(R.string.ui_restart_mic_hint))
-        param(engine, "live_block", str(R.string.ui_block_audio_converted_per_step), 15.0, 50.0, 1.0, 27.0, "×10 ms")
-        param(engine, "live_context", str(R.string.ui_additional_context), 0.0, 300.0, 10.0, 100.0, "×10 ms")
-        param(engine, "live_crossfade", str(R.string.ui_crossfade), 4.0, 12.0, 1.0, 8.0, "×10 ms")
-        param(engine, "live_cushion_cs", str(R.string.ui_output_buffer_reduce_dropouts), 2.0, 20.0, 1.0, 6.0, "×10 ms")
-        param(engine, "live_threshold_db", str(R.string.ui_silence_threshold), -80.0, -30.0, 5.0, -60.0, " dB")
-        param(engine, "live_input_gain_db", str(R.string.ui_input_gain), 0.0, 24.0, 1.0, 12.0, " dB")
-        param(engine, "live_gain_db", str(R.string.ui_output_gain), -12.0, 24.0, 1.0, 12.0, " dB")
+        param(engine, "live_block", str(R.string.ui_block_audio_converted_per_step), 0.15, 0.50, 0.01, 0.27, 0.01, { seconds(it) })
+        param(engine, "live_context", str(R.string.ui_additional_context), 0.0, 3.0, 0.01, 1.50, 0.01, { seconds(it) })
+        param(engine, "live_crossfade", str(R.string.ui_crossfade), 0.04, 0.12, 0.01, 0.08, 0.01, { seconds(it) })
+        param(engine, "live_cushion_cs", str(R.string.ui_output_buffer_reduce_dropouts), 0.02, 0.20, 0.01, 0.06, 0.01, { seconds(it) })
+        param(engine, "live_threshold_db", str(R.string.ui_silence_threshold), -80.0, -30.0, 1.0, -60.0, 1.0, { db(it) })
+        param(engine, "live_input_gain_db", str(R.string.ui_input_gain), 0.0, 24.0, 1.0, 12.0, 1.0, { db(it) })
+        param(engine, "live_gain_db", str(R.string.ui_output_gain), -12.0, 24.0, 1.0, 12.0, 1.0, { db(it) })
         switchParam(engine, "live_split", str(R.string.ui_split_decoder_npu_bit_cpu), false)
 
         heading(str(R.string.ui_model_settings))
