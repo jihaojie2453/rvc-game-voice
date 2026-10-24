@@ -112,7 +112,6 @@ class MainActivity : Activity() {
         f<Button>(R.id.settings_close).visibility = View.GONE  // 通用已经是页签，不再需要关闭按钮
         setupRecordPage()
         setupConfigPage()
-        setupLivePage()
         setupStatusPage()
         setupSettingsPage()
         // 0.5.3 的每音色一份 settings.json 与 voice_live:* 先搬成「默认方案」；失败不阻塞启动
@@ -147,11 +146,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         if (!busy) refreshModels()
-        sharedLiveControls?.refresh()
-        liveGainBar?.progress = livePrefs().getInt("live_gain_db", 12) + 12
         if (recorder == null) refreshRecordings()  // realtime recordings may have been saved from the notification
-        updateGameVoiceSummary()
-        if (LiveSession.engine != null) { ui.removeCallbacks(liveTicker); ui.post(liveTicker) }  // back from the notification
         ui.removeCallbacks(statusTicker); ui.post(statusTicker)
     }
 
@@ -164,7 +159,7 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         player.stop()
         engine?.close()
-        ui.removeCallbacks(liveTicker)
+        listenStop()  // 离开时不要留着试听占用麦克风
         if (!LiveSession.running) LiveSession.release()  // a running session goes on (its notification stops it)
         super.onDestroy()
     }
@@ -187,7 +182,6 @@ class MainActivity : Activity() {
         }
         if (which != SETTINGS) prefs.edit().putString("page", which).apply() else showCompute()
         f<ScrollView>(R.id.scroll).scrollTo(0, 0)
-        if (which == LIVE) { loadLiveSliders(); showLive() }
         if (which == CONFIG) fillGameRows()
     }
 
@@ -408,10 +402,74 @@ class MainActivity : Activity() {
             .setPositiveButton(str(R.string.ui_save)) { _, _ ->
                 GameBinding.bind(prefs, pkg, dir.name, picked())
                 fillGameRows()
-                updateGameVoiceSummary()
             }
             .setNegativeButton(str(R.string.ui_cancel), null)
             .show()
+    }
+    /**
+     * 试听：用方案里的参数把麦克风就地变声，只送耳机/扬声器，不进入任何 App。
+     * 编辑页滑杆改动后调用 [LiveSession.engine]?.update(...) 就能立刻听到。
+     */
+    private fun listenStart(dir: File, settings: Rvc.Settings, onReady: () -> Unit = {}) {
+        if (listening || LiveSession.engine != null) return
+        if (!File(commonDir, "hubert.onnx").isFile || !File(commonDir, "rmvpe.onnx").isFile) {
+            toast(str(R.string.ui_shared_models_hubert_and_rmvpe_are_required)); return
+        }
+        val mic = android.Manifest.permission.RECORD_AUDIO
+        if (checkSelfPermission(mic) != PackageManager.PERMISSION_GRANTED) {
+            pendingListen = { listenStart(dir, settings, onReady) }
+            requestPermissions(arrayOf(mic), LIVE_MIC)
+            return
+        }
+        if (RootMicController.active || VirtualMicSession.isActive) {
+            toast(str(R.string.ui_turn_off_the_virtual_microphone_first)); return
+        }
+        val params = liveParams()
+        val devices = liveDevices(dir)
+        val threads = prefs.getInt("threads", 4)
+        val speaker = prefs.getBoolean("live_speaker", false)
+        listening = true
+        thread {
+            try {
+                val key = "${dir.path}|${devices.ep}|${devices.file}|${devices.front}|$threads|${params.block}|${params.tail}|${params.window(null)}"
+                if (LiveSession.rvcKey != key) {
+                    LiveSession.rvc?.close(); LiveSession.rvc = null; LiveSession.rvcKey = ""
+                    LiveSession.rvc = Rvc(commonDir, dir, threads, devices.ep,
+                        if (decFile != "model.dec.onnx") decFile else devices.file, devices.front,
+                        live = Rvc.LiveShape(params.block, params.tail, windowFrames = params.window(null)),
+                        allowFallback = true)
+                    LiveSession.rvcKey = key
+                }
+                val btMic = prefs.getBoolean("mic_bluetooth", false)
+                val inputGain = Math.pow(10.0, livePrefs().getInt(
+                    if (btMic) "live_input_gain_db_bt" else "live_input_gain_db", if (btMic) 0 else 12
+                ).coerceIn(0, 24) / 20.0).toFloat()
+                val e = LiveEngine(applicationContext, LiveSession.rvc!!, params, settings, speaker, false, base, inputGain)
+                e.setGain(params.gainDb)
+                e.warmUp()
+                e.start()
+                LiveSession.engine = e
+                liveMessage = null
+                ui.post(onReady)
+            } catch (t: Throwable) {
+                android.util.Log.e("VoiceStudio", "listen start failed", t)
+                listening = false
+                LiveSession.stop(applicationContext)
+                ui.post { toast(str(R.string.ui_could_not_start, t.message)) }
+            }
+        }
+    }
+
+    private fun listenStop() {
+        val e = LiveSession.engine ?: return
+        LiveSession.engine = null
+        listening = false
+        thread { e.stop(); LiveSession.stop(applicationContext) }
+    }
+
+    /** 编辑页滑杆松手后调用：正在试听就立刻换参数，下一个 10 ms 步生效。 */
+    private fun listenApply(settings: Rvc.Settings) {
+        if (listening) LiveSession.engine?.update(settings)
     }
     /** 方案参数：音色参数 / 高级设置 / 模型设置。默认方案在调用处已拦掉，这里再拦一次。 */
     private fun showProfileEditor(dir: File, profile: String) {
@@ -448,6 +506,18 @@ class MainActivity : Activity() {
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(4), dp(20), dp(4))
         }
+        val preview = Button(this, null, 0, R.style.SoftButton).apply {
+            text = str(R.string.ui_listen); textSize = 13f
+            layoutParams = LinearLayout.LayoutParams(-1, dp(44)).apply { topMargin = dp(10) }
+        }
+        preview.setOnClickListener {
+            if (listening) { listenStop(); preview.text = str(R.string.ui_listen) }
+            else {
+                listenStart(dir, VoiceProfiles.settings(voice)) { preview.text = str(R.string.ui_listen_stop) }
+            }
+        }
+        body.addView(preview)
+
         fun heading(text: String, hint: String? = null) {
             body.addView(TextView(this).apply {
                 this.text = text; textSize = 14f; setTypeface(typeface, Typeface.BOLD)
@@ -470,7 +540,7 @@ class MainActivity : Activity() {
             bar.setOnSeekBarChangeListener(slider { p, done ->
                 val v = min + p * step
                 value.text = format(v, step) + unit
-                if (done) json.put(key, v)
+                if (done) { json.put(key, v); listenApply(VoiceProfiles.settings(voice)) }
             })
         }
         fun switchParam(json: JSONObject, key: String, label: String, def: Boolean) {
@@ -482,7 +552,7 @@ class MainActivity : Activity() {
                 text = label; textSize = 13f; setTextColor(getColor(R.color.text))
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             val sw = Switch(this).apply { isChecked = numOf(json, key, if (def) 1.0 else 0.0) != 0.0 }
-            sw.setOnCheckedChangeListener { _, on -> json.put(key, if (on) 1.0 else 0.0) }
+            sw.setOnCheckedChangeListener { _, on -> json.put(key, if (on) 1.0 else 0.0); listenApply(VoiceProfiles.settings(voice)) }
             row.addView(sw)
             body.addView(row)
         }
@@ -540,6 +610,7 @@ class MainActivity : Activity() {
                 toast(str(R.string.ui_saved_restart_mic))
             }
             .setNegativeButton(str(R.string.ui_cancel), null)
+            .setOnDismissListener { listenStop() }
             .show()
     }
 
@@ -788,7 +859,6 @@ class MainActivity : Activity() {
             if (!commonOk) append(str(R.string.ui_shared_models_hubert_onnx_and_rmvpe_onnx))
             if (models.isEmpty()) append(str(R.string.ui_voice_model_name_enc_onnx_name_dec))
         }
-        if (page == LIVE) { loadLiveSliders(); showLive() }
     }
 
     @Volatile private var downloadStop = false
@@ -1158,25 +1228,16 @@ class MainActivity : Activity() {
 
     // ---------------------------------------------------------------- live page
 
+    /** 试听时用：没有本地监听时给出可读的提示。 */
     @Volatile private var livePreparing = false
     @Volatile private var liveMessage: String? = null
-    private var lastLive: LiveEngine.Stats? = null
-    private val liveBars = HashMap<String, SeekBar>()
-    private val liveTicker = object : Runnable {
-        override fun run() {
-            showLive()
-            if (LiveSession.engine != null || livePreparing) ui.postDelayed(this, 100)
-        }
-    }
+    private var listening = false
+    /** 试听需要麦克风权限时，授予后继续启动。 */
+    private var pendingListen: (() -> Unit)? = null
 
     /** Timing is saved per model and applies at the next start. */
     private fun livePrefs() = ModelLivePreferences(prefs, currentModel()?.name)
     private fun liveParams() = LivePreferences.readWithMic(false, livePrefs()::getInt, prefs.getBoolean("mic_bluetooth", false))
-    private var liveSplitSwitch: Switch? = null
-    private var refreshingLiveProfile = false
-    private var sharedLiveControls: LiveSettingsUi? = null
-    private var liveGainBar: SeekBar? = null
-    private var gameVoiceSummary: TextView? = null
 
     private fun card(parent: LinearLayout) = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
@@ -1188,44 +1249,8 @@ class MainActivity : Activity() {
 
     private fun valueText() = TextView(this).apply { textSize = 13f; typeface = Typeface.MONOSPACE; setTextColor(getColor(R.color.accent_strong)) }
 
-    private fun parameterHelp(parent: LinearLayout, text: String) {
-        parent.addView(TextView(this).apply {
-            this.text = text; textSize = 11f; setTextColor(getColor(R.color.muted))
-            setPadding(0, dp(2), 0, 0); setLineSpacing(dp(2).toFloat(), 1f)
-        })
-    }
 
-    private fun updateGameVoiceSummary() {
-        val view = gameVoiceSummary ?: return
-        val known = listOf("com.netease.wyclx", "com.tencent.tmgp.pubgmhd", "com.tencent.tmgp.pubg")
-        val lines = known.mapNotNull { pkg ->
-            val info = runCatching { packageManager.getApplicationInfo(pkg, 0) }.getOrNull() ?: return@mapNotNull null
-            val label = packageManager.getApplicationLabel(info).toString()
-            "$label：${GameVoiceMap.model(prefs, pkg) ?: str(R.string.ui_game_voice_unbound)}"
-        }
-        view.text = if (lines.isEmpty()) str(R.string.ui_game_voice_no_games) else lines.joinToString("\n")
-    }
 
-    private fun switchRow(parent: LinearLayout, label: String, hint: String, key: String) {
-        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(12), 0, 0) }
-        row.addView(LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            addView(TextView(this@MainActivity).apply { text = label; textSize = 13f })
-            addView(TextView(this@MainActivity).apply { text = hint; textSize = 11f; setTextColor(getColor(R.color.muted)) })
-        })
-        row.addView(Switch(this).apply {
-            isChecked = if (key == "live_split") livePrefs().getBoolean(key, false) else prefs.getBoolean(key, false)
-            if (key == "live_split") liveSplitSwitch = this
-            setOnCheckedChangeListener { _, on ->
-                if (!refreshingLiveProfile) {
-                    if (key == "live_split") livePrefs().putBoolean(key, on) else prefs.edit().putBoolean(key, on).apply()
-                    showLive()
-                }
-            }
-        })
-        parent.addView(row)
-    }
 
     // ---------------------------------------------------------------- status page (game -> voice -> profile -> start)
 
@@ -1389,260 +1414,11 @@ class MainActivity : Activity() {
         renderStatusState()
     }
 
-    private fun setupLivePage() {
-        f<Button>(R.id.live_toggle).setOnClickListener { toggleLive() }
-        f<Button>(R.id.live_rec).setOnClickListener { toggleLiveRecording() }
-        val page = f<LinearLayout>(R.id.page_live)
-        val web = card(page)
-        page.removeView(web); page.addView(web, 0)
-        web.addView(Button(this, null, 0, R.style.SoftButton).apply {
-            layoutParams = LinearLayout.LayoutParams(-1, dp(48))
-            text = str(R.string.ui_web_calls_desktop_browser)
-            setOnClickListener { startActivity(Intent(this@MainActivity, WebCallActivity::class.java)) }
-        })
-        web.addView(TextView(this).apply {
-            text = str(R.string.ui_start_live_conversion_then_connect_your_converted)
-            textSize = 12f; setTextColor(getColor(R.color.muted)); setPadding(0,dp(8),0,0)
-        })
-        val virtualCard = card(page)
-        page.removeView(virtualCard); page.addView(virtualCard, 1)
-        virtualCard.addView(TextView(this).apply {
-            text = str(R.string.ui_send_your_voice_to_other_apps); textSize = 17f
-            typeface = Typeface.create("sans-serif", Typeface.BOLD)
-            setTextColor(getColor(R.color.text))
-        })
-        virtualCard.addView(TextView(this).apply {
-            text = str(R.string.ui_virtual_mic_root_no_time); textSize = 12f
-            setTextColor(getColor(R.color.muted)); setPadding(0, dp(6), 0, dp(12))
-        })
-        virtualCard.addView(Button(this, null, 0, R.style.SoftButton).apply {
-            text = str(R.string.ui_open_virtual_mic)
-            gravity = Gravity.CENTER
-            setPadding(0, 0, 0, 0)
-            layoutParams = LinearLayout.LayoutParams(-1, dp(48))
-            setOnClickListener {
-                if (busy || livePreparing || LiveSession.running || recorder != null) {
-                    toast(str(R.string.ui_stop_the_current_recording_or_conversion_first))
-                } else {
-                    engine?.close(); engine = null; engineKey = ""
-                    LiveSession.release()
-                    startActivity(Intent(this@MainActivity, VirtualMicScreenActivity::class.java))
-                }
-            }
-        })
-        val games = card(page)
-        page.removeView(games); page.addView(games, 2)
-        games.addView(TextView(this).apply {
-            text = str(R.string.ui_game_voice_title); textSize = 17f
-            typeface = Typeface.create("sans-serif", Typeface.BOLD); setTextColor(getColor(R.color.text))
-        })
-        games.addView(TextView(this).apply {
-            text = str(R.string.ui_game_voice_help); textSize = 12f
-            setTextColor(getColor(R.color.muted)); setPadding(0, dp(6), 0, dp(8))
-        })
-        gameVoiceSummary = TextView(this).apply {
-            textSize = 12f; setTextColor(getColor(R.color.text)); setLineSpacing(dp(3).toFloat(), 1f)
-        }
-        games.addView(gameVoiceSummary)
-        games.addView(Button(this, null, 0, R.style.SoftButton).apply {
-            text = str(R.string.ui_manage_game_voices)
-            layoutParams = LinearLayout.LayoutParams(-1, dp(46)).apply { topMargin = dp(10) }
-            setOnClickListener { startActivity(Intent(this@MainActivity, VirtualMicScreenActivity::class.java)) }
-        })
-        // Output level, pitch and texture belong to the selected voice.
-        val voice = card(page)
-        voice.addView(TextView(this).apply { text = str(R.string.ui_voice_changes_apply_instantly); textSize = 13f; setTypeface(typeface, Typeface.BOLD) })
-        val gainValue = valueText()
-        val gain = sliderRow(voice, str(R.string.ui_output_gain), gainValue, "−12 dB", "+24 dB", 36)
-        gain.setOnSeekBarChangeListener(slider { p, done ->
-            gainValue.text = String.format(Locale.US, "%+d dB", p - 12)
-            LiveSession.engine?.setGain((p - 12).toDouble())
-            if (done) livePrefs().putInt("live_gain_db", p - 12)
-        })
-        liveGainBar = gain
-        gain.progress = livePrefs().getInt("live_gain_db", 12) + 12
-        parameterHelp(voice, str(R.string.help_gain))
-        val pitchValue = valueText()
-        val pitch = sliderRow(voice, str(R.string.ui_pitch_relative_to_your_voice), pitchValue, "−24", "+24", 48)
-        pitch.setOnSeekBarChangeListener(slider { p, done ->
-            pitchValue.text = if (p == 24) str(R.string.ui_semitones) else String.format(Locale.US, str(R.string.ui_semitones_2), p - 24)
-            if (done) saveSetting("pitch", (p - 24).toDouble())
-        })
-        liveBars["pitch"] = pitch
-        parameterHelp(voice, str(R.string.help_pitch))
-        val formantValue = valueText()
-        val formant = sliderRow(voice, str(R.string.ui_formant_voice_texture), formantValue, "−2", "+2", 40)
-        formant.setOnSeekBarChangeListener(slider { p, done ->
-            formantValue.text = String.format(Locale.US, "%.1f", (p - 20) / 10.0)
-            if (done) saveSetting("formant", (p - 20) / 10.0)
-        })
-        liveBars["formant"] = formant
-        parameterHelp(voice, str(R.string.help_formant))
-        // the rest takes effect at the next start
-        val more = card(page)
-        val header = TextView(this).apply { textSize = 13f; setTypeface(typeface, Typeface.BOLD) }
-        val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        fun setOpen(open: Boolean) {
-            body.visibility = if (open) View.VISIBLE else View.GONE
-            header.text = if (open) str(R.string.ui_advanced_settings_apply_on_next_start) else str(R.string.ui_advanced_settings_apply_on_next_start_2)
-            prefs.edit().putBoolean("live_settings_open", open).apply()
-        }
-        header.setOnClickListener { setOpen(body.visibility != View.VISIBLE) }
-        more.addView(header)
-        more.addView(body)
-        body.addView(TextView(this).apply {
-            text = str(R.string.ui_live_per_voice_help); textSize = 11f; setTextColor(getColor(R.color.muted))
-        })
-        sharedLiveControls = LiveSettingsUi(this, ::livePrefs, changed = { showLive() }).also { it.timing(body) }
-        switchRow(body, str(R.string.ui_split_decoder_npu_bit_cpu), str(R.string.ui_can_sound_smoother_but_is_slower_needs), "live_split")
-        switchRow(body, str(R.string.ui_play_through_speaker), str(R.string.ui_converted_audio_may_feed_back_into_the), "live_speaker")
-        switchRow(body, str(R.string.ui_bypass_conversion_diagnostics), str(R.string.ui_play_the_original_mic_audio_without_the), "live_bypass")
-        val export = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(14), 0, 0) }
-        export.addView(TextView(this).apply {
-            text = str(R.string.ui_save_diagnostics_and_the_latest_live_recording)
-            textSize = 11f; setTextColor(getColor(R.color.muted))
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        })
-        export.addView(Button(this, null, 0, R.style.SoftButton).apply {
-            text = str(R.string.ui_export_diagnostics)
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(36)).apply { marginStart = dp(10) }
-            setOnClickListener { exportLive() }
-        })
-        body.addView(export)
-        setOpen(prefs.getBoolean("live_settings_open", false))
-    }
 
     /** The live page's pitch and texture from the selected voice's settings.json. */
-    private fun loadLiveSliders() {
-        val dir = currentModel() ?: return
-        sharedLiveControls?.refresh()
-        liveGainBar?.progress = livePrefs().getInt("live_gain_db", 12) + 12
-        refreshingLiveProfile = true
-        liveSplitSwitch?.isChecked = livePrefs().getBoolean("live_split", false)
-        refreshingLiveProfile = false
-        val j = settingsJson(dir)
-        fun num(k: String) = if (j.has(k)) j.optDouble(k, 0.0) else 0.0
-        liveBars["pitch"]?.progress = (num("pitch") + 24).roundToInt()
-        liveBars["formant"]?.progress = ((num("formant") + 2) * 10).roundToInt()
-    }
 
-    private fun toggleLive() {
-        if (RootMicController.active || VirtualMicSession.isActive) { toast(str(R.string.ui_turn_off_the_virtual_microphone_first)); return }
-        if (LiveSession.engine != null) { stopLive(); return }
-        if (livePreparing) return
-        val mic = android.Manifest.permission.RECORD_AUDIO
-        if (checkSelfPermission(mic) != PackageManager.PERMISSION_GRANTED) {
-            // the notification that keeps it running with the screen off needs its own permission (Android 13+)
-            val ask = mutableListOf(mic)
-            if (android.os.Build.VERSION.SDK_INT >= 33) ask += android.Manifest.permission.POST_NOTIFICATIONS
-            requestPermissions(ask.toTypedArray(), LIVE_MIC)
-            return
-        }
-        fun abort(): Boolean = true
-        val dir = currentModel() ?: run { toast(str(R.string.ui_select_a_voice_model_on_the_convert)); abort(); return }
-        if (!File(commonDir, "hubert.onnx").isFile || !File(commonDir, "rmvpe.onnx").isFile) { toast(str(R.string.ui_shared_models_hubert_and_rmvpe_are_required)); abort(); return }
-        if (recorder != null) { toast(str(R.string.ui_stop_recording_first)); abort(); return }
-        if (busy) { toast(str(R.string.ui_wait_for_conversion_to_finish)); abort(); return }
-        player.stop()
-        var params = liveParams()
-        val autoBlock = livePrefs().getBoolean("live_auto_block", false)
-        val devices = liveDevices(dir)
-        val ep = devices.ep
-        val liveDec = if (decFile != "model.dec.onnx") decFile else devices.file
-        val front = devices.front
-        val threads = prefs.getInt("threads", 4)
-        val speaker = prefs.getBoolean("live_speaker", false)
-        val bypass = prefs.getBoolean("live_bypass", false)
-        val settings = settingsOf(dir)
-        livePreparing = true
-        liveMessage = str(R.string.ui_preparing)
-        lastLive = null
-        engine?.close(); engine = null; engineKey = ""  // the file engine makes room for the realtime models
-        ui.removeCallbacks(liveTicker)
-        ui.post(liveTicker)
-        thread {
-            try {
-                while (true) {
-                    val key = "${dir.path}|$ep|$liveDec|$front|$threads|${params.block}|${params.tail}|${params.window(null)}"
-                    if (LiveSession.rvcKey != key) {
-                        LiveSession.rvc?.close()
-                        LiveSession.rvc = null
-                        LiveSession.rvcKey = ""
-                        liveMessage = str(R.string.ui_preparing_model_the_first_run_may_take)
-                        LiveSession.rvc = Rvc(commonDir, dir, threads, ep, liveDec, front, live = Rvc.LiveShape(params.block, params.tail, windowFrames = params.window(null)), allowFallback = true)
-                        LiveSession.rvcKey = key
-                    }
-                    if (!autoBlock || bypass) break
-                    liveMessage = str(R.string.live_auto_block_calibrating, params.block * 10)
-                    val timing = AutoBlock.measure(LiveCore(LiveSession.rvc!!, params), settings)
-                    val next = AutoBlock.nextBlock(params.block, timing.maximumMs)
-                        ?: error(str(R.string.live_auto_block_slow))
-                    android.util.Log.i("VoiceStudio", "BLOCK_CALIBRATION block_ms=${params.block*10} steady_ms=${timing.steadyMs} next_ms=${next*10}")
-                    if (next == params.block) break
-                    params = params.copy(block = next)
-                }
-                val btMic = prefs.getBoolean("mic_bluetooth", false)
-                val inputGain = Math.pow(10.0, livePrefs().getInt(
-                    if (btMic) "live_input_gain_db_bt" else "live_input_gain_db", if (btMic) 0 else 12
-                ).coerceIn(0, 24) / 20.0).toFloat()
-                val e = LiveEngine(applicationContext, LiveSession.rvc!!, params, settings, speaker, bypass, base, inputGain)
-                e.setGain(params.gainDb)
-                liveMessage = str(R.string.ui_warming_up)
-                e.warmUp()
-                startForegroundService(Intent(this, LiveService::class.java))
-                e.start()
-                LiveSession.engine = e
-                liveMessage = null
-            } catch (t: Throwable) {
-                android.util.Log.e("VoiceStudio", "live start failed", t)
-                liveMessage = str(R.string.ui_could_not_start, t.message)
-                LiveSession.stop(applicationContext)
-            } finally {
-                livePreparing = false
-                ui.post { showLive() }
-            }
-        }
-    }
 
-    private fun stopLive(failure: String? = null) {
-        val e = LiveSession.engine ?: return
-        lastLive = e.snapshot()
-        LiveSession.engine = null  // the ticker stops; the threads end below
-        liveMessage = failure ?: str(R.string.ui_stopping)
-        thread {
-            val saved = e.stopRecording()
-            e.stop()
-            LiveSession.stop(applicationContext)
-            ui.post {
-                liveMessage = failure
-                if (saved != null) {
-                    refreshRecordings()
-                    liveMessage = (failure?.let { "$it\n" } ?: "") + String.format(Locale.US, str(R.string.ui_saved_to_record_s), saved.first.nameWithoutExtension.removeSuffix("_원본"), saved.third)
-                }
-                showLive()
-                    }
-        }
-    }
 
-    private fun toggleLiveRecording() {
-        val e = LiveSession.engine ?: return
-        if (e.snapshot().recording >= 0) {
-            thread {
-                val saved = e.stopRecording()
-                ui.post {
-                    refreshRecordings()
-                    if (saved != null) liveMessage = String.format(Locale.US, str(R.string.ui_saved_to_record_s), saved.first.nameWithoutExtension.removeSuffix("_원본"), saved.third)
-                    showLive()
-                }
-            }
-        } else {
-            val stamp = SimpleDateFormat("MMdd_HHmmss", Locale.US).format(Date())
-            recordingsDir.mkdirs()
-            e.startRecording(File(recordingsDir, "실시간_${stamp}_원본.wav"), File(recordingsDir, "실시간_${stamp}_변환.wav"))
-            liveMessage = null
-        }
-        showLive()
-    }
 
     /** The realtime diagnosis (logs, block timings) and the newest realtime recording into Download/VoiceStudio/live_<time>,
      *  where a PC can reach them (the app's own folder is closed to other apps and to adb for files it made). */
@@ -1668,60 +1444,13 @@ class MainActivity : Activity() {
     private val thermalNames = listOf(str(R.string.ui_normal), str(R.string.ui_slightly_warm), str(R.string.ui_warm), str(R.string.ui_hot_may_slow_down), str(R.string.ui_very_hot), str(R.string.ui_critical), str(R.string.ui_near_shutdown))
 
     /** The live page: buttons, the two scrolling waveforms and the numbers that tell whether the phone keeps up. */
-    private fun showLive() {
-        val e = LiveSession.engine
-        if (e != null && !e.isRunning) {  // the worker stopped by itself (an error)
-            stopLive(e.snapshot().failure?.let { str(R.string.ui_stopped_2, it) } ?: str(R.string.ui_stopped))
-            return
-        }
-        val s = e?.snapshot() ?: lastLive
-        val params = liveParams()
-        val selected = currentModel()?.let { liveDevices(it) }
-        val active = LiveSession.rvc?.takeIf { e != null }
-        val deviceLabel = active?.let { str(R.string.ui_front_end_decoder, it.frontDevice, it.decoderDevice) }
-            ?: selected?.label ?: str(R.string.ui_automatic_compute_selection)
-        f<TextView>(R.id.live_device).text = "${currentModel()?.name ?: str(R.string.ui_no_model)} · $deviceLabel · " +
-            String.format(Locale.US, str(R.string.ui_block_s), params.block / 100.0) +
-            (if (prefs.getBoolean("live_bypass", false)) str(R.string.ui_bypass_diagnostics) else "") +
-            (s?.output?.takeIf { it.isNotEmpty() }?.let { str(R.string.ui_output, it) } ?: "") + str(R.string.ui_top_microphone_bottom_converted_voice)
-        val toggle = f<Button>(R.id.live_toggle)
-        toggle.text = when { livePreparing -> str(R.string.ui_preparing); e != null -> str(R.string.ui_stop); else -> str(R.string.ui_start) }
-        toggle.isEnabled = !livePreparing
-        val rec = f<Button>(R.id.live_rec)
-        val recording = (s?.recording ?: -1.0) >= 0 && e != null
-        rec.isEnabled = e != null
-        rec.text = if (recording) str(R.string.ui_stop_3) else str(R.string.ui_record_2)
-        val recTime = f<TextView>(R.id.live_rec_time)
-        recTime.visibility = if (recording) View.VISIBLE else View.GONE
-        if (recording) recTime.text = clock((s!!.recording * Rvc.SR).toInt())
-        if (e != null && s != null) {
-            f<WaveformView>(R.id.live_in_wave).livePeaks = s.inPeaks
-            f<WaveformView>(R.id.live_out_wave).livePeaks = s.outPeaks
-        }
-        val stats = f<TextView>(R.id.live_stats)
-        if (s != null && s.steps > 0) {
-            val load = s.compute / s.block
-            stats.text = String.format(Locale.US, str(R.string.ui_step_ms_block_ms_peak_est_latency),
-                s.compute * 1000, s.block * 1000, load * 100, s.computeMax * 1000, s.latency, s.underruns, s.drops,
-                if (s.extraCushion > 0) String.format(Locale.US, str(R.string.ui_buffer_s), s.extraCushion) else "",
-                s.inPeakDb, s.outPeakDb, if (s.clips > 0) str(R.string.ui_clipped, s.clips) else "", thermalNames.getOrElse(s.thermal) { "${s.thermal}" })
-            stats.setTextColor(getColor(if (load > 1 || s.drops > 0) R.color.rec else R.color.text))
-        } else stats.text = ""
-        f<TextView>(R.id.live_info).text = liveMessage ?: when {
-            e != null && s != null && s.steps >= 3 && s.compute > s.block ->
-                str(R.string.ui_conversion_is_not_keeping_up_increase_the)
-            e != null && active?.fallbackNotice != null -> active.fallbackNotice
-            e != null -> str(R.string.ui_conversion_continues_with_the_screen_off_you)
-            else -> str(R.string.ui_use_headphones_without_headphones_audio_plays_through)
-        }
-    }
     // ---------------------------------------------------------------- misc
 
     override fun onRequestPermissionsResult(code: Int, permissions: Array<out String>, results: IntArray) {
         val mic = permissions.indexOf(android.Manifest.permission.RECORD_AUDIO).let { results.getOrNull(it) } == PackageManager.PERMISSION_GRANTED
         if (code == MIC && mic) toggleRecording()
         else if (code == MIC) toast(str(R.string.ui_microphone_permission_is_required_to_record))
-        else if (code == LIVE_MIC && mic) toggleLive()
+        else if (code == LIVE_MIC && mic) { pendingListen?.invoke(); pendingListen = null }
         else if (code == LIVE_MIC) toast(str(R.string.ui_microphone_permission_is_required_for_live_conversion))
         else if (code == STATUS_MIC && mic) {
             val pkg = prefs.getString("status_game", null) ?: return

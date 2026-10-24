@@ -422,4 +422,6 @@
     <string name="ui_decoder_whole">整图解码器</string>
     <string name="ui_decoder_split">拆分解码器</string>
     <string name="ui_saved_restart_mic">已保存。高级设置需重启虚拟麦后生效。</string>
+    <string name="ui_listen">试听</string>
+    <string name="ui_listen_stop">停止试听</string>
 </resources>
