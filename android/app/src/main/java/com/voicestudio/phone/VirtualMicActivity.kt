@@ -75,6 +75,8 @@ object VirtualMicSession {
     @Volatile var core: LiveCore? = null
     /** 输入增益（线性），读 socket 时逐块乘上，所以可以热改。 */
     @Volatile var inGain: Float = 1f
+    /** 方案里有「必须重开会话才生效」的改动（音色质感、块大小等）。 */
+    @Volatile var needsRestart = false
 
     /** 最后一次真正产生音频的 elapsedRealtime；用来判断“是不是真的在变声”。 */
     @Volatile var lastAudioAt = 0L
@@ -98,6 +100,7 @@ object VirtualMicSession {
     }
 
     @Synchronized fun start(context: Context, intent: Intent) {
+        needsRestart = false
         check(!active) { "Previous session is still closing" }
         val name = intent.getStringExtra("virtual_mic_socket") ?: error("Missing socket")
         require(name.matches(Regex("virtual-mic-[a-zA-Z0-9-]{8,64}")))
@@ -206,6 +209,15 @@ object VirtualMicSession {
                         for (k in arrayOf("live_gain_db", "live_threshold_db", "live_input_gain_db")) {
                             if (eng.has(k)) VirtualMicSession.applyEngine(k, eng.optDouble(k, 0.0))
                         }
+                        // 这些改了没法热生效，只能重开会话：音色质感（共振峰）与引擎形状（块/上下文/交叉淡化/缓冲）
+                        val cushionCs = (params.cushion * 100).roundToInt()
+                        val shapeChanged =
+                            eng.optInt("live_block", params.block) != params.block ||
+                            eng.optInt("live_context", params.context) != params.context ||
+                            eng.optInt("live_crossfade", params.crossfade) != params.crossfade ||
+                            Math.abs(eng.optDouble("live_cushion_cs", cushionCs.toDouble()) - cushionCs) > 0.5
+                        VirtualMicSession.needsRestart =
+                            shapeChanged || Math.abs(fresh.formant - fixedFormant) >= 1e-9
                         log("SETTINGS_APPLIED profile=$profileName pitch=${settings.pitch} formant_fixed=$fixedFormant rms=${settings.rmsMixRate}")
                     }
                 }

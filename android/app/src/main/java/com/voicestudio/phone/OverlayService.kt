@@ -67,6 +67,9 @@ class OverlayService : Service() {
     private var expanded = false
     private var syncing = false
     private var lastTrace = 0L
+    private var restartButton: Button? = null
+    private var idleSince = 0L
+    @Volatile private var restarting = false
 
     private val prefs by lazy { getSharedPreferences("phone", Context.MODE_PRIVATE) }
     private val modelsDir by lazy { File(getExternalFilesDir(null), "models") }
@@ -194,6 +197,7 @@ class OverlayService : Service() {
             text = str(R.string.ui_overlay_restart); textSize = 12f
             setOnClickListener { restartSession() }
         }
+        restartButton = restart
         actions.addView(restart, LinearLayout.LayoutParams(0, dp(42), 1.15f))
         val quit = Button(this, null, 0, R.style.SoftButton).apply {
             text = str(R.string.ui_overlay_quit); textSize = 12f
@@ -326,10 +330,21 @@ class OverlayService : Service() {
     private fun renderState() {
         val running = RootMicController.active || VirtualMicSession.isActive
         if (!running) {
-            // 会话已经结束：悬浮窗自己退场
-            stopSelf()
+            // 重启/切换音色时会出现一瞬间“没有会话”，不能在这时自杀（否则 MIUI 立刻冻结进程，重启就没了）。
+            // 真的停了（超过 5 秒）才退场。
+            if (restarting) {
+                idleSince = 0L
+                dot?.background = circle(red, dp(20))
+                (collapsed?.getChildAt(1) as? TextView)?.text = str(R.string.ui_overlay_switching)
+                return
+            }
+            if (idleSince == 0L) idleSince = android.os.SystemClock.elapsedRealtime()
+            if (android.os.SystemClock.elapsedRealtime() - idleSince > 5000) {
+                stopSelf()
+            }
             return
         }
+        idleSince = 0L
         val phase = RootMicController.phase
         val streaming = VirtualMicSession.lastAudioAt > 0 &&
             android.os.SystemClock.elapsedRealtime() - VirtualMicSession.lastAudioAt < 1200
@@ -339,6 +354,10 @@ class OverlayService : Service() {
             android.util.Log.i("VoiceStudio", "OVERLAY live=$live streaming=$streaming phase=$phase lastAudio=${VirtualMicSession.lastAudioAt} active=${RootMicController.active}")
         }
         dot?.background = circle(if (live) green else red, dp(20))
+        // 只有「改了必须重启才生效」的参数时才点亮重开会话，否则灰着
+        val canRestart = VirtualMicSession.needsRestart && !restarting
+        restartButton?.isEnabled = canRestart
+        restartButton?.alpha = if (canRestart) 1f else 0.38f
         (collapsed?.getChildAt(1) as? TextView)?.text = when {
             switching?.visibility == View.VISIBLE -> str(R.string.ui_overlay_switching)
             live -> str(R.string.ui_overlay_live)
@@ -458,25 +477,56 @@ class OverlayService : Service() {
         val profile = if (VoiceProfiles.exists(File(modelsDir, model), profileName)) profileName else VoiceProfiles.DEFAULT
         GameBinding.bind(prefs, pkg, model, profile)
         prefs.edit().putString("model", model).apply()
-        switching?.apply { text = str(R.string.ui_overlay_switching); visibility = View.VISIBLE }
-        // 换音色必须重建引擎：先停会话，等桥接退出后再用新模型拉起
-        RootMicController.stop()
-        ui.postDelayed({
-            RootMicController.start(applicationContext, pkg, model)
-            ui.postDelayed({ switching?.visibility = View.GONE }, 1200)
-        }, 1500)
+        // 换音色必须重建引擎：走同一套「等拆完再起」的流程
+        restartWith(pkg, model)
     }
 
     /** 改完共振峰/高级参数后点一下：重建会话（期间保持红色）。 */
     private fun restartSession() {
         val pkg = prefs.getString("status_game", null) ?: return
         val model = bound?.model ?: prefs.getString("model", null) ?: return
-        switching?.apply { text = str(R.string.ui_overlay_switching); visibility = View.VISIBLE }
+        restartWith(pkg, model)
+    }
+
+    /**
+     * 停旧会话 → 等它真的拆干净（RootMicController.start 有 check(!active)）→ 再起新的。
+     * 之前固定等 1.5 秒，拆不干净时 start 抛异常，直接把进程带崩，表现就是「拉不起来」。
+     */
+    private fun restartWith(pkg: String, model: String) {
+        if (restarting) return   // 连点两次不要开两个重启流程
+        restarting = true
+        idleSince = 0L
+        showSwitching(str(R.string.ui_overlay_switching))
         RootMicController.stop()
-        ui.postDelayed({
+        VirtualMicSession.stop()
+        awaitIdleThenStart(pkg, model, 0)
+    }
+
+    private fun awaitIdleThenStart(pkg: String, model: String, attempt: Int) {
+        val busy = RootMicController.active || VirtualMicSession.isActive || LiveSession.running
+        if (busy) {
+            if (attempt >= 48) {  // ~12 秒还没拆完
+                restarting = false
+                showSwitching(str(R.string.ui_could_not_start_2))
+                return
+            }
+            ui.postDelayed({ awaitIdleThenStart(pkg, model, attempt + 1) }, 250)
+            return
+        }
+        val result = runCatching {
+            runCatching { startForegroundService(Intent(this, LiveService::class.java).putExtra("virtual_mic", true)) }
             RootMicController.start(applicationContext, pkg, model)
+        }
+        restarting = false
+        if (result.isFailure) {
+            showSwitching(str(R.string.ui_could_not_start, result.exceptionOrNull()?.message ?: ""))
+        } else {
             ui.postDelayed({ switching?.visibility = View.GONE }, 1200)
-        }, 1500)
+        }
+    }
+
+    private fun showSwitching(text: String) {
+        switching?.apply { this.text = text; visibility = View.VISIBLE }
     }
 
     private fun switchProfile(profile: String) {
