@@ -170,6 +170,10 @@ final class AppBridge implements Closeable {
         int pending = 0, offset = 0, missingTarget = 0;
         Method getUid = AudioRecordingConfiguration.class.getMethod("getClientUid");
         long start = System.nanoTime(), end = BridgeTiming.deadline(start, seconds);
+        // 注入轨缓冲 40 ms（1920 帧）。只领先 480 帧（10 ms）时余量太小：实测 5 分钟里 track_underruns
+        // 记到 6 次，每次约 130 ms 静音（音乐里的"卡一下"）。这里只放宽领先量、不动缓冲大小
+        // （setBufferSizeInFrames 会把 mix 重配，可能让 REMOTE_SUBMIX 采集直接哑掉，见 16:09 会话）。
+        final int lead = 1440;
         boolean persistent = seconds == 0 && call == null, capturing = !persistent, targetActive = !persistent;
         long lastConverted = start, lastWritten = start, previousReceived = received;
         long nextCheck = 0, lastHeartbeat = 0, segmentStart = start, segmentWritten = 0, segmentCaptured = captured;
@@ -239,7 +243,7 @@ final class AppBridge implements Closeable {
                     captured += n;
                 }
                 long now = System.nanoTime();
-                if (pending == offset && written - segmentWritten < (now - segmentStart) * 48000 / 1_000_000_000L + 480) {
+                if (pending == offset && written - segmentWritten < (now - segmentStart) * 48000 / 1_000_000_000L + lead) {
                     boolean wasReady = gate.isReady();
                     boolean play;
                     synchronized (this) { play = gate.canTake(now - segmentStart, queued); }

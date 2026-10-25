@@ -10,6 +10,8 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- 会话跑起来以后只剩一颗悬浮按钮，App 退到后台 -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- 本地音频：读 /storage/emulated/0/好东西/音频/ 下的分类与文件，必须「所有文件访问」 -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
     <queries>
         <intent>
             <action android:name="android.intent.action.MAIN" />

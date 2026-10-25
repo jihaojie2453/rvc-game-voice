@@ -96,6 +96,17 @@
                 android:textSize="14sp"
                 android:textStyle="bold" />
             <TextView
+                android:id="@+id/tab_audio"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:background="@drawable/tab"
+                android:gravity="center"
+                android:text="@string/ui_audio"
+                android:textColor="@color/tab_text"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+            <TextView
                 android:id="@+id/tab_setting"
                 android:layout_width="0dp"
                 android:layout_height="match_parent"
@@ -230,6 +241,14 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:orientation="vertical" />>
+
+            <!-- ======== audio page: local files sent into the virtual microphone ======== -->
+            <LinearLayout
+                android:id="@+id/page_audio"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone" />
 
             <!-- ======== settings (the gear at the top): voice models, where the models run, records ======== -->
             <LinearLayout

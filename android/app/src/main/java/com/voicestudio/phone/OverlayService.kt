@@ -9,6 +9,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.provider.Settings
+import android.text.TextUtils
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -17,9 +18,12 @@ import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.Spinner
+import android.widget.Switch
 import android.widget.TextView
+import android.widget.Toast
 import org.json.JSONObject
 import java.io.File
 import java.util.Locale
@@ -71,6 +75,21 @@ class OverlayService : Service() {
     private var idleSince = 0L
     @Volatile private var restarting = false
 
+    // ---- 音频专属悬浮窗（第二个窗口）----
+    private var audioRoot: LinearLayout? = null
+    private var audioPanel: LinearLayout? = null
+    private var audioIcon: TextView? = null
+    private var audioSpinner: Spinner? = null
+    private var audioList: LinearLayout? = null
+    private var audioState: TextView? = null
+    private var audioToggle: Button? = null
+    private var audioExpanded = false
+    private var audioSyncing = false
+    private var audioCategories: List<AudioLibrary.Category> = emptyList()
+    private val audioRows = ArrayList<Pair<String, TextView>>()
+    private var audioHighlight: String? = null
+    private var rowOn: GradientDrawable? = null
+
     private val prefs by lazy { getSharedPreferences("phone", Context.MODE_PRIVATE) }
     private val modelsDir by lazy { File(getExternalFilesDir(null), "models") }
 
@@ -79,6 +98,7 @@ class OverlayService : Service() {
 
     private val tick = object : Runnable {
         override fun run() {
+            renderAudio()
             renderState()
             ui.postDelayed(this, 300)
         }
@@ -99,6 +119,8 @@ class OverlayService : Service() {
         ui.removeCallbacksAndMessages(null)
         root?.let { runCatching { wm.removeView(it) } }
         root = null
+        audioRoot?.let { runCatching { wm.removeView(it) } }
+        audioRoot = null
         super.onDestroy()
     }
 
@@ -132,7 +154,7 @@ class OverlayService : Service() {
             setColor(Color.parseColor("#CC1B1B1F"))
         }
         head.background = capsule
-        drag(head) { toggle() }
+        drag(head, { root }) { toggle() }
         column.addView(head, LinearLayout.LayoutParams(-2, -2))
 
         // 展开态：面板
@@ -199,13 +221,18 @@ class OverlayService : Service() {
         }
         restartButton = restart
         actions.addView(restart, LinearLayout.LayoutParams(0, dp(42), 1.15f))
+        val audio = Button(this, null, 0, R.style.SoftButton).apply {
+            text = str(R.string.ui_audio); textSize = 12f
+            setOnClickListener { showAudioOverlay() }
+        }
+        actions.addView(audio, LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginStart = dp(8) })
         val quit = Button(this, null, 0, R.style.SoftButton).apply {
             text = str(R.string.ui_overlay_quit); textSize = 12f
             setOnClickListener { quitEverything() }
         }
         actions.addView(quit, LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginStart = dp(8) })
         body.addView(actions)
-        drag(title)
+        drag(title, { root })
 
         column.addView(body, LinearLayout.LayoutParams(dp(268), -2).apply { topMargin = dp(8) })
         panel = body
@@ -287,11 +314,11 @@ class OverlayService : Service() {
         if (args.isEmpty()) getString(id) else getString(id, *args)
 
     /** 拖动移动悬浮窗；手指没动就当作点击（否则触摸监听会把点击吞掉）。 */
-    private fun drag(handle: View, onClick: (() -> Unit)? = null) {
+    private fun drag(handle: View, win: () -> View?, onClick: (() -> Unit)? = null) {
         var startX = 0; var startY = 0; var downX = 0f; var downY = 0f
         var moved = false
         handle.setOnTouchListener { v, e ->
-            val lp = root?.layoutParams as? WindowManager.LayoutParams
+            val lp = win()?.layoutParams as? WindowManager.LayoutParams
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     startX = lp?.x ?: 0; startY = lp?.y ?: 0
@@ -303,10 +330,11 @@ class OverlayService : Service() {
                     val dx = e.rawX - downX
                     val dy = e.rawY - downY
                     if (Math.abs(dx) > dp(6) || Math.abs(dy) > dp(6)) moved = true
-                    if (moved && lp != null) {
+                    val view = win()
+                    if (moved && lp != null && view != null) {
                         lp.x = startX + dx.roundToInt()
                         lp.y = startY + dy.roundToInt()
-                        runCatching { wm.updateViewLayout(root, lp) }
+                        runCatching { wm.updateViewLayout(view, lp) }
                     }
                     true
                 }
@@ -554,4 +582,290 @@ class OverlayService : Service() {
             runCatching { kotlin.system.exitProcess(0) }
         }
     }
+
+    // ---------------------------------------------------------------- 音频悬浮窗（第二个窗口）
+
+    /** 主面板上的「音频」按钮：第一次点建窗口，之后只是重新露出来。 */
+    private fun showAudioOverlay() {
+        if (audioRoot == null) createAudioWindow()
+        audioRoot?.visibility = View.VISIBLE
+        audioExpanded = true
+        audioPanel?.visibility = View.VISIBLE
+        populateAudio()
+    }
+
+    private fun hideAudioOverlay() {
+        audioExpanded = false
+        audioPanel?.visibility = View.GONE
+        audioRoot?.visibility = View.GONE
+    }
+
+    /** 一颗 ♪ 图标 + 面板：图标可拖、可点开，面板里选分类、点音频直接发。 */
+    private fun createAudioWindow() {
+        val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val icon = TextView(this).apply {
+            text = "♪"
+            textSize = 20f
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.parseColor("#E61B1B1F"))
+                setStroke(dp(1), Color.parseColor("#8030A46C"))
+            }
+        }
+        column.addView(icon, LinearLayout.LayoutParams(dp(44), dp(44)))
+
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dp(16).toFloat()
+                setColor(Color.parseColor("#F7141418"))
+            }
+            visibility = View.GONE
+        }
+        val title = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        title.addView(TextView(this).apply {
+            text = str(R.string.ui_audio); textSize = 13f; setTextColor(Color.WHITE)
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        title.addView(TextView(this).apply {
+            text = "×"; textSize = 20f; setTextColor(Color.parseColor("#9A9AA5"))
+            setPadding(dp(10), 0, dp(4), 0)
+            setOnClickListener { hideAudioOverlay() }
+        })
+        body.addView(title)
+
+        body.addView(rowLabel(str(R.string.ui_audio_category)))
+        val spinner = Spinner(this)
+        body.addView(spinner)
+
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val scroll = ScrollView(this).apply { addView(list) }
+        body.addView(scroll, LinearLayout.LayoutParams(-1, dp(168)).apply { topMargin = dp(6) })
+
+        val status = TextView(this).apply {
+            textSize = 11f
+            setTextColor(Color.parseColor("#9A9AA5"))
+            setPadding(0, dp(6), 0, 0)
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
+        }
+        body.addView(status)
+
+        body.addView(Switch(this).apply {
+            text = str(R.string.ui_audio_loop)
+            textSize = 12f
+            setTextColor(Color.WHITE)
+            isChecked = AudioDeck.loop
+            setPadding(0, dp(6), 0, 0)
+            setOnCheckedChangeListener { _, checked ->
+                AudioDeck.loop = checked
+                prefs.edit().putBoolean("audio_loop", checked).apply()
+            }
+        })
+
+        audioVolume(body)
+
+        val toggle = Button(this, null, 0, R.style.SoftButton).apply {
+            text = str(R.string.ui_audio_stop)
+            textSize = 12f
+            isEnabled = false
+            alpha = 0.38f
+            setOnClickListener { AudioDeck.toggle() }
+        }
+        body.addView(toggle, LinearLayout.LayoutParams(-1, dp(42)).apply { topMargin = dp(8) })
+
+        drag(title, { audioRoot })
+        drag(icon, { audioRoot }) {
+            audioExpanded = !audioExpanded
+            audioPanel?.visibility = if (audioExpanded) View.VISIBLE else View.GONE
+            if (audioExpanded) populateAudio()
+        }
+
+        column.addView(body, LinearLayout.LayoutParams(dp(268), -2).apply { topMargin = dp(8) })
+
+        audioIcon = icon
+        audioPanel = body
+        audioSpinner = spinner
+        audioList = list
+        audioState = status
+        audioToggle = toggle
+        audioRoot = column
+
+        val lp = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            android.graphics.PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = dp(16); y = dp(210)
+        }
+        runCatching { wm.addView(column, lp) }.onFailure { audioRoot = null }
+    }
+
+    private fun populateAudio() {
+        val list = audioList ?: return
+        val spin = audioSpinner ?: return
+        if (!AudioLibrary.scanned) {
+            list.removeAllViews()
+            list.addView(hintRow(str(R.string.ui_audio_loading)))
+            thread {
+                AudioLibrary.scan()
+                ui.post { populateAudio() }
+            }
+            return
+        }
+        audioCategories = AudioLibrary.categories
+        if (audioCategories.isEmpty()) {
+            list.removeAllViews()
+            list.addView(hintRow(when (AudioLibrary.problem) {
+                AudioLibrary.Problem.PERMISSION -> str(R.string.ui_audio_need_permission)
+                AudioLibrary.Problem.MISSING -> str(R.string.ui_audio_no_folder, AudioLibrary.root.path)
+                else -> str(R.string.ui_audio_none)
+            }))
+            return
+        }
+        val saved = prefs.getString("audio_category", null)
+        audioSyncing = true
+        try {
+            val (adapter, index) = simple(audioCategories.map { it.name }, saved)
+            spin.adapter = adapter
+            spin.setSelection(index, false)
+            spin.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
+                    if (audioSyncing) return
+                    val picked = audioCategories.getOrNull(position) ?: return
+                    if (picked.name != prefs.getString("audio_category", null)) {
+                        prefs.edit().putString("audio_category", picked.name).apply()
+                        AudioDeck.pause()   // 换分类就停下，免得出现「在播但看不到高亮」
+                    }
+                    fillAudio(picked)
+                }
+
+                override fun onNothingSelected(parent: AdapterView<*>?) {}
+            }
+            fillAudio(audioCategories.getOrNull(index))
+        } finally {
+            audioSyncing = false
+        }
+    }
+
+    private fun fillAudio(category: AudioLibrary.Category?) {
+        val list = audioList ?: return
+        val tracks = if (category == null) emptyList() else AudioLibrary.tracks(category)
+        audioRows.clear()
+        audioHighlight = null
+        list.removeAllViews()
+        if (tracks.isEmpty()) {
+            list.addView(hintRow(str(R.string.ui_audio_none)))
+            return
+        }
+        for (track in tracks) {
+            val row = TextView(this).apply {
+                text = track.name
+                textSize = 12f
+                setTextColor(Color.WHITE)
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+                setPadding(dp(10), dp(9), dp(10), dp(9))
+                setOnClickListener {
+                    if (!VirtualMicSession.isActive) {
+                        Toast.makeText(this@OverlayService, str(R.string.ui_audio_need_session), Toast.LENGTH_SHORT).show()
+                        return@setOnClickListener
+                    }
+                    AudioDeck.play(track)
+                }
+            }
+            list.addView(row, LinearLayout.LayoutParams(-1, -2))
+            audioRows.add(track.id to row)
+        }
+    }
+
+    private fun hintRow(text: String): TextView = TextView(this).apply {
+        this.text = text
+        textSize = 11f
+        setTextColor(Color.parseColor("#9A9AA5"))
+        setPadding(dp(10), dp(10), dp(10), dp(10))
+    }
+
+    /** 每 300 ms：按钮文案、状态行、当前音频的高亮。 */
+    private fun renderAudio() {
+        if (audioRoot == null) return
+        val state = AudioDeck.state
+        val name = AudioDeck.track?.name ?: ""
+        audioToggle?.text = if (state == AudioDeck.State.PAUSED) str(R.string.ui_audio_continue)
+        else str(R.string.ui_audio_stop)
+        val usable = state == AudioDeck.State.PLAYING || state == AudioDeck.State.PAUSED
+        audioToggle?.isEnabled = usable
+        audioToggle?.alpha = if (usable) 1f else 0.38f
+        audioState?.text = when {
+            AudioDeck.failure == AudioDeck.Failure.NO_SESSION -> str(R.string.ui_audio_need_session)
+            AudioDeck.failure == AudioDeck.Failure.DECODE -> str(R.string.ui_audio_failed, AudioDeck.failureDetail ?: name)
+            state == AudioDeck.State.LOADING -> str(R.string.ui_audio_loading)
+            state == AudioDeck.State.PLAYING && RootMicController.phase == MicPhase.WAITING -> str(R.string.ui_audio_waiting_mic)
+            state == AudioDeck.State.PLAYING -> str(
+                R.string.ui_audio_sending, name,
+            ) + "  " + clock(AudioDeck.positionMs) + " / " + clock(AudioDeck.durationMs)
+            state == AudioDeck.State.PAUSED -> str(R.string.ui_audio_paused, name)
+            else -> ""
+        }
+        val want = if (state == AudioDeck.State.IDLE) null else AudioDeck.track?.id
+        if (want != audioHighlight) {
+            audioHighlight = want
+            val on = rowOn ?: GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dp(8).toFloat()
+                setColor(Color.parseColor("#332FA46C"))
+            }.also { rowOn = it }
+            for ((id, view) in audioRows) view.background = if (id == want) on else null
+        }
+    }
+
+    private fun audioVolume(parent: LinearLayout) {
+        val head = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(10), 0, 0)
+        }
+        head.addView(TextView(this).apply {
+            text = str(R.string.ui_audio_volume); textSize = 11f; setTextColor(Color.parseColor("#C9C9D1"))
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        val value = TextView(this).apply { textSize = 11f; setTextColor(Color.WHITE) }
+        head.addView(value)
+        parent.addView(head)
+        val min = -24.0
+        val max = 12.0
+        fun label(v: Float) = String.format(Locale.US, "%+.0f dB", v)
+        val bar = SeekBar(this).apply {
+            this.max = (max - min).toInt()
+            progress = (AudioDeck.gainDb - min).roundToInt().coerceIn(0, this.max)
+            setPadding(dp(2), 0, dp(2), 0)
+            value.text = label(AudioDeck.gainDb)
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
+                    value.text = label((min + p).toFloat())
+                }
+
+                override fun onStartTrackingTouch(sb: SeekBar?) {}
+
+                override fun onStopTrackingTouch(sb: SeekBar?) {
+                    val db = (min + (sb?.progress ?: 0)).toFloat()
+                    AudioDeck.setGain(db)
+                    prefs.edit().putFloat("audio_gain_db", db).apply()
+                }
+            })
+        }
+        parent.addView(bar, LinearLayout.LayoutParams(-1, dp(28)))
+    }
+
+    private fun clock(ms: Long): String =
+        String.format(Locale.US, "%d:%02d", ms / 60_000, (ms / 1000) % 60)
 }

@@ -97,6 +97,8 @@ object VirtualMicSession {
     fun stop() {
         running = false
         silentHold = false
+        // 会话一停就没有注入点了，本地音频的播放状态必须跟着清掉
+        AudioDeck.release()
         runCatching { socket?.close() }
         wake.release()
     }
@@ -313,6 +315,9 @@ object VirtualMicSession {
                         // 绿点只认「真的在说话」：游戏占着麦克风、只有环境声时不点亮。
                         if (core.lastSpoke) VirtualMicSession.noteAudio()
                         if (!running) break
+                        // 本地音频（不变声）按块叠加进回注 PCM：和变声输出走同一条通路，游戏侧同时听到两路。
+                        // 放在这里是因为静音停推时 step 也会返回一整块零，素材照样能送出去。
+                        AudioDeck.mix(y)
                         val pcm = ByteArray(y.size*2)
                         for (i in y.indices) {
                             val v = (y[i]*32768).roundToInt().coerceIn(-32768,32767)
@@ -330,7 +335,7 @@ object VirtualMicSession {
                         val now=System.nanoTime()
                         if (now-lastReport>1_000_000_000L) {
                             status=String.format(Locale.US,str(R.string.ui_virtual_mic_converting_ms_block_processing_ms),model.name,block*10,ms,backlog,drops)
-                            log("STREAM steps=$steps compute_ms=$ms backlog_ms=$backlog in_peak=${core.lastInPeak} out_peak=${core.lastRawPeak} drops=$drops quiet_steps=$quietSteps")
+                            log("STREAM steps=$steps compute_ms=$ms backlog_ms=$backlog in_peak=${core.lastInPeak} out_peak=${core.lastRawPeak} drops=$drops quiet_steps=$quietSteps audio=${AudioDeck.state} audio_peak=${AudioDeck.lastPeak} audio_over=${AudioDeck.clippedBlocks}")
                             lastReport=now
                         }
                     }

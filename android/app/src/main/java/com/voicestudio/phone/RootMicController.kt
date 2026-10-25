@@ -36,6 +36,7 @@ object RootMicController {
     @Volatile private var rootToken = ""
     @Volatile private var rootPort = 0
     private val rootLog = StringBuilder()
+    @Volatile private var rootLogFile: File? = null
     @Volatile private var rootCheckedAt = 0L
     @Volatile private var rootOk = false
 
@@ -95,6 +96,7 @@ object RootMicController {
             var converterStarted = false
             val log = File(app.getExternalFilesDir(null), "virtual_mic/$tag.log")
             log.parentFile?.mkdirs()
+            rootLogFile = log
             try {
                 check(checkRoot(force = true)) { str(R.string.ui_root_required) }
                 val token = "virtual-mic-${UUID.randomUUID()}"
@@ -105,6 +107,14 @@ object RootMicController {
                 val cmd = buildString {
                     append("CLASSPATH='").append(apk).append("' exec /system/bin/app_process /system/bin --nice-name=virtual_mic dev.virtualmic.Main")
                     append(" --package '").append(target).append("' --mic --seconds 0 --bridge '").append(token).append("' --watch-parent --fail-closed")
+                    // 不要加 --track-buffer-ms：实测放大注入轨缓冲会让采集端哑掉（音乐一响麦克风就没声）
+                    // 有 debug_trace 时让桥接把两路音频各留一份：采集到的输入 + 写进注入轨的输出。
+                    // 卡顿时对比这两条，就能分清是采集端丢样（我们这边）还是 AudioTrack 之后丢的。
+                    if (File(app.getExternalFilesDir(null), "debug_trace").isFile) {
+                        // 落在 /data/local/tmp（数据分区）而不是 /sdcard：后者是 FUSE，写一次可能几十毫秒，
+                        // 会自己制造采集溢出，把要找的问题盖掉。
+                        append(" --trace '/data/local/tmp/$tag'")
+                    }
                     if (bluetoothMic) append(" --mic-bt")
                     if (useOtherProfile) append(" --other-profile")
                     if (useAllApps) append(" --all-apps")
@@ -123,6 +133,8 @@ object RootMicController {
                             }
                         }
                     }
+                    // 只在结束时落盘一次（原逻辑）：运行中每行写 /sdcard 是 FUSE 操作，
+                    // 写入卡顿会把桥接的播放循环拖住，反过来制造 track underrun。
                 }
                 if (!ready.await(25, TimeUnit.SECONDS) || cancel.get()) {
                     if (!cancel.get()) error = str(R.string.ui_root_bridge_timeout)
@@ -180,7 +192,17 @@ object RootMicController {
         userStopped.set(true)
         cancelled.set(true)
         runCatching { rootProcess?.outputStream?.write(2); rootProcess?.outputStream?.flush() }
+        // 「退出应用」会在 400 ms 后杀进程；先把桥接日志落盘，否则这次会话的 BRIDGE_STREAM 就没了
+        flushRootLog()
         if (!active) VirtualMicSession.stop()
+    }
+
+    /** 把内存里的桥接日志写到 virtual_mic/root-*.log（只在停止时做一次，运行中写盘会拖慢播放循环）。 */
+    private fun flushRootLog() {
+        val file = rootLogFile ?: return
+        val text = synchronized(rootLog) { rootLog.toString() }
+        if (text.isEmpty()) return
+        runCatching { file.parentFile?.mkdirs(); file.writeText(text) }
     }
 
     private fun readableError(message: String): String = when {

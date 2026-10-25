@@ -429,4 +429,27 @@
     <string name="ui_overlay_quit">退出应用</string>
     <string name="ui_overlay_permission">请允许「显示在其他应用上层」，这样才能保留悬浮麦克风按钮</string>
     <string name="ui_overlay_restart">重开会话</string>
+
+    <!-- 本地音频：直接送进虚拟麦克风，不做变声 -->
+    <string name="ui_audio">音频</string>
+    <string name="ui_audio_folder">音频目录：%1$s</string>
+    <string name="ui_audio_grant">授权读取音频目录</string>
+    <string name="ui_audio_grant_hint">读取你自己的目录需要「所有文件访问」权限，授权一次即可；以后加分类、加音频都不用再操作。</string>
+    <string name="ui_audio_need_permission">没有读取音频目录的权限</string>
+    <string name="ui_audio_category">分类</string>
+    <string name="ui_audio_files">音频</string>
+    <string name="ui_audio_none">没有音频文件</string>
+    <string name="ui_audio_no_folder">找不到目录：%1$s</string>
+    <string name="ui_audio_count">共 %1$d 个音频</string>
+    <string name="ui_audio_tap_to_send">点一下发送进麦克风</string>
+    <string name="ui_audio_volume">音频音量</string>
+    <string name="ui_audio_loop">循环发送（间隔 1.5 秒）</string>
+    <string name="ui_audio_stop">停止</string>
+    <string name="ui_audio_continue">继续</string>
+    <string name="ui_audio_loading">正在载入音频...</string>
+    <string name="ui_audio_sending">正在发送 %1$s</string>
+    <string name="ui_audio_paused">已暂停 %1$s</string>
+    <string name="ui_audio_waiting_mic">等待游戏占用麦克风</string>
+    <string name="ui_audio_failed">无法播放 %1$s</string>
+    <string name="ui_audio_need_session">请先启动虚拟麦克风</string>
 </resources>
