@@ -2,7 +2,6 @@ package com.voicestudio.phone
 
 import android.app.Activity
 import android.app.AlertDialog
-import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Typeface
@@ -12,7 +11,6 @@ import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.provider.DocumentsContract
-import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.text.SpannableStringBuilder
 import android.text.style.ForegroundColorSpan
@@ -1204,19 +1202,6 @@ class MainActivity : Activity() {
         })
         // records
         val records = card(page)
-        records.addView(TextView(this).apply { text = str(R.string.ui_diagnostics); textSize = 13f; setTypeface(typeface, Typeface.BOLD) })
-        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(8), 0, 0) }
-        row.addView(TextView(this).apply {
-            text = str(R.string.ui_save_live_diagnostics_and_the_latest_live)
-            textSize = 11f; setTextColor(getColor(R.color.muted))
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        })
-        row.addView(Button(this, null, 0, R.style.SoftButton).apply {
-            text = str(R.string.ui_export_diagnostics)
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(36)).apply { marginStart = dp(10) }
-            setOnClickListener { exportLive() }
-        })
-        records.addView(row)
         val version = runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: "?"
         records.addView(TextView(this).apply {
             text = str(R.string.ui_app_folder_version, base.path, version)
@@ -1556,27 +1541,6 @@ class MainActivity : Activity() {
 
 
 
-
-    /** The realtime diagnosis (logs, block timings) and the newest realtime recording into Download/VoiceStudio/live_<time>,
-     *  where a PC can reach them (the app's own folder is closed to other apps and to adb for files it made). */
-    private fun exportLive() {
-        thread {
-            val stamp = SimpleDateFormat("MMdd_HHmmss", Locale.US).format(Date())
-            val files = listOf("live_log.txt", "live_log_prev.txt", "live_blocks.csv", "live_blocks_prev.csv").map { File(base, it) }.filter { it.isFile } +
-                (recordingsDir.listFiles { f -> f.name.startsWith("실시간_") }?.sortedByDescending { it.lastModified() }?.take(2) ?: emptyList())
-            var done = 0
-            for (file in files) runCatching {
-                val values = ContentValues().apply {
-                    put(MediaStore.Downloads.DISPLAY_NAME, file.name)
-                    put(MediaStore.Downloads.RELATIVE_PATH, "Download/VoiceStudio/live_$stamp")
-                }
-                val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return@runCatching
-                contentResolver.openOutputStream(uri)?.use { out -> file.inputStream().use { it.copyTo(out) } }
-                done++
-            }
-            ui.post { toast(str(R.string.ui_saved_files_to_downloads_voicestudio_live, stamp, done)) }
-        }
-    }
 
     private val thermalNames = listOf(str(R.string.ui_normal), str(R.string.ui_slightly_warm), str(R.string.ui_warm), str(R.string.ui_hot_may_slow_down), str(R.string.ui_very_hot), str(R.string.ui_critical), str(R.string.ui_near_shutdown))
 

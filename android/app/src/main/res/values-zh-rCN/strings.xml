@@ -299,9 +299,6 @@
     <string name="ui_bit_npu">16 位 NPU</string>
     <string name="ui_cpu_threads">CPU 线程数</string>
     <string name="ui_device_settings_apply_to_the_next_file">设备设置会应用到下一次文件或实时变声。虚拟麦克风使用自己测试过的配置。</string>
-    <string name="ui_diagnostics">诊断</string>
-    <string name="ui_save_live_diagnostics_and_the_latest_live">将实时诊断和最近的实时录音保存到 Downloads 的 VoiceStudio 文件夹，方便在电脑上检查。</string>
-    <string name="ui_export_diagnostics">导出诊断</string>
     <string name="ui_app_folder_version">应用文件夹：%1$s\n版本 %2$s</string>
     <string name="ui_uses_the_cpu_for_the_front_end">前端使用 CPU，解码器使用 GPU 或 CPU 的 32 位精度。速度取决于设备。</string>
     <string name="ui_choose_devices_for_file_and_live_conversion">选择文件和实时变声使用的设备。不可用的加速器会回退到 CPU。16 位 NPU 解码器仅供对比。</string>
@@ -314,7 +311,6 @@
     <string name="ui_stop_the_current_recording_or_conversion_first">请先停止当前录音或转换。</string>
     <string name="ui_s">%1$.2f 秒</string>
     <string name="ui_save_diagnostics_and_the_latest_live_recording">将诊断和最近的实时录音保存到 Downloads 的 VoiceStudio 文件夹，方便在电脑上检查。</string>
-    <string name="ui_saved_files_to_downloads_voicestudio_live">已保存 %2$s 个文件到 live_%1$s（Downloads → VoiceStudio）</string>
     <string name="ui_normal">正常</string>
     <string name="ui_slightly_warm">微温</string>
     <string name="ui_warm">温热</string>
