@@ -428,4 +428,27 @@
     <string name="ui_overlay_quit">Quit</string>
     <string name="ui_overlay_permission">Allow "display over other apps" to keep the mic button on screen</string>
     <string name="ui_overlay_restart">Restart</string>
+
+    <!-- local audio sent into the virtual microphone -->
+    <string name="ui_audio">Audio</string>
+    <string name="ui_audio_folder">Audio folder: %1$s</string>
+    <string name="ui_audio_grant">Allow access to the audio folder</string>
+    <string name="ui_audio_grant_hint">Reading your own folder needs the "All files access" permission. Grant it once; adding categories later needs nothing.</string>
+    <string name="ui_audio_need_permission">No permission to read the audio folder</string>
+    <string name="ui_audio_category">Category</string>
+    <string name="ui_audio_files">Audio</string>
+    <string name="ui_audio_none">No audio files</string>
+    <string name="ui_audio_no_folder">Folder not found: %1$s</string>
+    <string name="ui_audio_count">%1$d audio files</string>
+    <string name="ui_audio_tap_to_send">Tap one to send it into the microphone</string>
+    <string name="ui_audio_volume">Audio volume</string>
+    <string name="ui_audio_loop">Loop (1.5 s gap)</string>
+    <string name="ui_audio_stop">Stop</string>
+    <string name="ui_audio_continue">Continue</string>
+    <string name="ui_audio_loading">Loading audio...</string>
+    <string name="ui_audio_sending">Sending %1$s</string>
+    <string name="ui_audio_paused">Paused %1$s</string>
+    <string name="ui_audio_waiting_mic">Waiting for the game to take the microphone</string>
+    <string name="ui_audio_failed">Could not play %1$s</string>
+    <string name="ui_audio_need_session">Start the virtual microphone first</string>
 </resources>

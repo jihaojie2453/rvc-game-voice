@@ -105,12 +105,14 @@ class MainActivity : Activity() {
         f<View>(R.id.tab_record).setOnClickListener { showPage(RECORD) }
         f<View>(R.id.tab_config).setOnClickListener { showPage(CONFIG) }
         f<View>(R.id.tab_live).setOnClickListener { showPage(LIVE) }
+        f<View>(R.id.tab_audio).setOnClickListener { showPage(AUDIO) }
         f<View>(R.id.tab_setting).setOnClickListener { showPage(SETTINGS) }
         f<View>(R.id.gear).visibility = View.GONE  // 设置页已有页签，齿轮只留空位
         f<Button>(R.id.settings_close).visibility = View.GONE  // 通用已经是页签，不再需要关闭按钮
         setupRecordPage()
         setupConfigPage()
         setupStatusPage()
+        setupAudioPage()
         setupSettingsPage()
         // 0.5.3 的每音色一份 settings.json 与 voice_live:* 先搬成「默认方案」；失败不阻塞启动
         runCatching { VoiceProfiles.migrateIfNeeded(prefs, modelsDir) }
@@ -118,10 +120,16 @@ class MainActivity : Activity() {
         player.onStateChange = { wave, playing -> playButtonFor(wave)?.text = if (playing) "⏸" else "▶" }
         val saved = prefs.getString("page", null)
         // 0.5.3 存过 "convert"，那一页已经不在页签里，统一落到「配置」
-        showPage(if (saved == RECORD || saved == LIVE || saved == SETTINGS) saved else CONFIG)
+        showPage(if (saved == RECORD || saved == LIVE || saved == AUDIO || saved == SETTINGS) saved else CONFIG)
         refreshModels()
         renderStatusCard()  // 模型列表就绪后重画状态页的音色/方案
         refreshRecordings()
+        // 本地音频：每次打开 App 扫一次目录（使用过程中不刷新，产品决定）
+        AudioDeck.setGain(prefs.getFloat("audio_gain_db", -12f))
+        AudioDeck.loop = prefs.getBoolean("audio_loop", false)
+        // 调试：有 debug_hooks 时把解码结果落成 wav，方便在电脑上验频谱
+        if (File(base, "debug_hooks").isFile) AudioDeck.dumpDir = File(base, "audio_debug").apply { mkdirs() }
+        reloadAudio()
         if (!ready) showPage(SETTINGS)  // first run: models come first
         decFile = hooks.getStringExtra("dec") ?: decFile
         hooks.getStringExtra("virtual_mic_socket")?.let {
@@ -145,6 +153,9 @@ class MainActivity : Activity() {
         super.onResume()
         if (!busy) refreshModels()
         if (recorder == null) refreshRecordings()  // realtime recordings may have been saved from the notification
+        // 刚从「所有文件访问」的设置页回来：重新扫一次音频目录
+        if (AudioLibrary.allowed() &&
+            (!AudioLibrary.scanned || AudioLibrary.problem == AudioLibrary.Problem.PERMISSION)) reloadAudio()
         ui.removeCallbacks(statusTicker); ui.post(statusTicker)
     }
 
@@ -173,6 +184,7 @@ class MainActivity : Activity() {
             Triple(RECORD, R.id.page_record, R.id.tab_record),
             Triple(CONFIG, R.id.page_config, R.id.tab_config),
             Triple(LIVE, R.id.page_live, R.id.tab_live),
+            Triple(AUDIO, R.id.page_audio, R.id.tab_audio),
             Triple(SETTINGS, R.id.page_settings, R.id.tab_setting),
         )) {
             f<View>(pageId).visibility = if (name == which) View.VISIBLE else View.GONE
@@ -181,6 +193,7 @@ class MainActivity : Activity() {
         if (which != SETTINGS) prefs.edit().putString("page", which).apply() else showCompute()
         f<ScrollView>(R.id.scroll).scrollTo(0, 0)
         if (which == CONFIG) fillGameRows()
+        if (which == AUDIO) renderAudioState()
     }
 
     private fun playButtonFor(wave: WaveformView?): Button? = when (wave?.id) {
@@ -1222,6 +1235,275 @@ class MainActivity : Activity() {
         (computeViews["now"] as? TextView)?.text = currentModel()?.let { str(R.string.ui_current_voice, it.name, fileDevices(it).label) } ?: ""
     }
 
+    // ---------------------------------------------------------------- audio page (local files -> virtual mic)
+
+    private var audioCatSpinner: Spinner? = null
+    private var audioTrackHost: LinearLayout? = null
+    private var audioCount: TextView? = null
+    private var audioStatus: TextView? = null
+    private var audioToggleButton: Button? = null
+    private var audioGrant: Button? = null
+    private var audioGrantHint: TextView? = null
+    private val audioRows = ArrayList<Pair<String, View>>()
+    private var audioHighlight: String? = null
+    private var audioCats: List<AudioLibrary.Category> = emptyList()
+    private var audioSyncing = false
+    private var audioScanning = false
+
+    /**
+     * 「音频」页签：本地素材 → 虚拟麦克风。素材按 /好东西/音频/<分类>/<文件> 组织，
+     * 分类就是一级目录，加目录就等于加分类。这里只做浏览和发送，真正混音在会话的块循环里。
+     */
+    private fun setupAudioPage() {
+        val page = f<LinearLayout>(R.id.page_audio)
+        page.removeAllViews()
+
+        val library = card(page)
+        library.addView(TextView(this).apply {
+            text = str(R.string.ui_audio_folder, AudioLibrary.root.path)
+            textSize = 12f
+            setTextColor(getColor(R.color.muted))
+        })
+        val grant = Button(this, null, 0, R.style.SoftButton).apply {
+            text = str(R.string.ui_audio_grant)
+            setOnClickListener { openAllFilesAccess() }
+        }
+        audioGrant = grant
+        library.addView(grant)
+        val grantHint = TextView(this).apply {
+            text = str(R.string.ui_audio_grant_hint)
+            textSize = 11f
+            setTextColor(getColor(R.color.muted))
+            setPadding(0, dp(6), 0, 0)
+        }
+        audioGrantHint = grantHint
+        library.addView(grantHint)
+        library.addView(TextView(this).apply {
+            text = str(R.string.ui_audio_category)
+            textSize = 11f
+            setTextColor(getColor(R.color.muted))
+            setPadding(0, dp(10), 0, 0)
+        })
+        val spinner = Spinner(this).apply { setBackgroundResource(R.drawable.spinner) }
+        audioCatSpinner = spinner
+        library.addView(spinner, LinearLayout.LayoutParams(-1, dp(44)))
+        val countLabel = TextView(this).apply {
+            textSize = 11f
+            setTextColor(getColor(R.color.muted))
+            setPadding(0, dp(6), 0, 0)
+        }
+        audioCount = countLabel
+        library.addView(countLabel)
+
+        val files = card(page)
+        files.addView(TextView(this).apply {
+            text = str(R.string.ui_audio_files)
+            textSize = 13f
+            setTypeface(typeface, Typeface.BOLD)
+        })
+        files.addView(TextView(this).apply {
+            text = str(R.string.ui_audio_tap_to_send)
+            textSize = 11f
+            setTextColor(getColor(R.color.muted))
+            setPadding(0, dp(4), 0, 0)
+        })
+        val trackHost = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        audioTrackHost = trackHost
+        files.addView(trackHost)
+
+        val control = card(page)
+        val toggleButton = Button(this, null, 0, R.style.SoftButton).apply {
+            text = str(R.string.ui_audio_stop)
+            isEnabled = false
+            alpha = 0.38f
+            setOnClickListener { AudioDeck.toggle() }
+        }
+        audioToggleButton = toggleButton
+        control.addView(toggleButton)
+        control.addView(Switch(this).apply {
+            text = str(R.string.ui_audio_loop)
+            textSize = 13f
+            isChecked = prefs.getBoolean("audio_loop", false)
+            setPadding(0, dp(8), 0, 0)
+            setOnCheckedChangeListener { _, checked ->
+                AudioDeck.loop = checked
+                prefs.edit().putBoolean("audio_loop", checked).apply()
+            }
+        })
+        val volumeValue = valueText()
+        val volumeBar = sliderRow(control, str(R.string.ui_audio_volume), volumeValue, "-24", "+12", 36)
+        volumeBar.progress = (AudioDeck.gainDb + 24f).roundToInt().coerceIn(0, 36)
+        volumeValue.text = String.format(Locale.US, "%+.0f dB", AudioDeck.gainDb)
+        volumeBar.setOnSeekBarChangeListener(slider { p, done ->
+            val db = -24f + p
+            volumeValue.text = String.format(Locale.US, "%+.0f dB", db)
+            if (done) {
+                AudioDeck.setGain(db)
+                prefs.edit().putFloat("audio_gain_db", db).apply()
+            }
+        })
+        val statusLabel = TextView(this).apply {
+            textSize = 11f
+            setTextColor(getColor(R.color.muted))
+            setPadding(0, dp(10), 0, 0)
+            maxLines = 3
+        }
+        audioStatus = statusLabel
+        control.addView(statusLabel)
+    }
+
+    /** 每次打开 App 扫一次：不提供刷新按钮（产品决定，使用过程中不往目录里加东西）。 */
+    private fun reloadAudio() {
+        if (audioScanning) return
+        audioScanning = true
+        thread {
+            val cats = runCatching { AudioLibrary.scan() }.getOrDefault(emptyList())
+            ui.post {
+                audioScanning = false
+                audioCats = cats
+                populateAudioPage()
+            }
+        }
+    }
+
+    private fun populateAudioPage() {
+        val allowed = AudioLibrary.allowed()
+        audioGrant?.visibility = if (allowed) View.GONE else View.VISIBLE
+        audioGrantHint?.visibility = if (allowed) View.GONE else View.VISIBLE
+        val spin = audioCatSpinner ?: return
+        val host = audioTrackHost ?: return
+        if (!allowed || audioCats.isEmpty()) {
+            audioSyncing = true
+            try {
+                spin.adapter = spinnerAdapter(listOf("—"))
+                spin.onItemSelectedListener = null
+            } finally {
+                audioSyncing = false
+            }
+            audioRows.clear()
+            audioHighlight = null
+            host.removeAllViews()
+            audioCount?.text = when {
+                !allowed -> str(R.string.ui_audio_need_permission)
+                AudioLibrary.problem == AudioLibrary.Problem.MISSING ->
+                    str(R.string.ui_audio_no_folder, AudioLibrary.root.path)
+                else -> str(R.string.ui_audio_none)
+            }
+            return
+        }
+        audioSyncing = true
+        try {
+            val saved = prefs.getString("audio_category", null)
+            val names = audioCats.map { it.name }
+            val index = names.indexOfFirst { it == saved }.takeIf { it >= 0 } ?: 0
+            spin.adapter = spinnerAdapter(names)
+            spin.setSelection(index, false)
+            spin.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
+                    if (audioSyncing) return
+                    val picked = audioCats.getOrNull(position) ?: return
+                    if (picked.name != prefs.getString("audio_category", null)) {
+                        prefs.edit().putString("audio_category", picked.name).apply()
+                        AudioDeck.pause()   // 换分类就停下，免得出现「在播但看不到高亮」
+                    }
+                    fillAudioPage(picked)
+                }
+
+                override fun onNothingSelected(parent: AdapterView<*>?) {}
+            }
+            fillAudioPage(audioCats[index])
+        } finally {
+            audioSyncing = false
+        }
+    }
+
+    private fun fillAudioPage(category: AudioLibrary.Category?) {
+        val host = audioTrackHost ?: return
+        val tracks = if (category == null) emptyList() else AudioLibrary.tracks(category)
+        audioRows.clear()
+        audioHighlight = null
+        host.removeAllViews()
+        audioCount?.text = str(R.string.ui_audio_count, tracks.size)
+        if (tracks.isEmpty()) {
+            host.addView(TextView(this).apply {
+                text = str(R.string.ui_audio_none)
+                textSize = 13f
+                setTextColor(getColor(R.color.muted))
+                setPadding(0, dp(10), 0, 0)
+            })
+            return
+        }
+        for (track in tracks) {
+            val row = TextView(this).apply {
+                text = track.name
+                textSize = 15f
+                setTextColor(getColor(R.color.text))
+                setPadding(dp(12), dp(13), dp(12), dp(13))
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                setOnClickListener {
+                    if (!VirtualMicSession.isActive) {
+                        toast(str(R.string.ui_audio_need_session))
+                        return@setOnClickListener
+                    }
+                    AudioDeck.play(track)
+                }
+            }
+            host.addView(row, LinearLayout.LayoutParams(-1, -2))
+            audioRows.add(track.id to row)
+        }
+    }
+
+    private fun spinnerAdapter(items: List<String>): ArrayAdapter<String> {
+        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, items)
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        return adapter
+    }
+
+    /** 每 500 ms 跟一次播放状态：按钮文案、状态行、当前音频高亮。 */
+    private fun renderAudioState() {
+        if (page != AUDIO && audioStatus == null) return
+        val state = AudioDeck.state
+        val name = AudioDeck.track?.name ?: ""
+        audioToggleButton?.text =
+            if (state == AudioDeck.State.PAUSED) str(R.string.ui_audio_continue) else str(R.string.ui_audio_stop)
+        val usable = state == AudioDeck.State.PLAYING || state == AudioDeck.State.PAUSED
+        audioToggleButton?.isEnabled = usable
+        audioToggleButton?.alpha = if (usable) 1f else 0.38f
+        audioStatus?.text = when {
+            AudioDeck.failure == AudioDeck.Failure.NO_SESSION -> str(R.string.ui_audio_need_session)
+            AudioDeck.failure == AudioDeck.Failure.DECODE -> str(R.string.ui_audio_failed, AudioDeck.failureDetail ?: name)
+            state == AudioDeck.State.LOADING -> str(R.string.ui_audio_loading)
+            state == AudioDeck.State.PLAYING && RootMicController.phase == MicPhase.WAITING ->
+                str(R.string.ui_audio_waiting_mic)
+            state == AudioDeck.State.PLAYING -> str(R.string.ui_audio_sending, name) + "  " +
+                audioClock(AudioDeck.positionMs) + " / " + audioClock(AudioDeck.durationMs)
+            state == AudioDeck.State.PAUSED -> str(R.string.ui_audio_paused, name)
+            !VirtualMicSession.isActive -> str(R.string.ui_audio_need_session)
+            else -> ""
+        }
+        val want = if (state == AudioDeck.State.IDLE) null else AudioDeck.track?.id
+        if (want != audioHighlight) {
+            audioHighlight = want
+            val on = getColor(R.color.lavender)
+            for ((id, view) in audioRows) view.setBackgroundColor(if (id == want) on else 0)
+        }
+    }
+
+    private fun openAllFilesAccess() {
+        val app = Intent(
+            android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+            Uri.parse("package:$packageName"),
+        )
+        runCatching { startActivity(app) }.onFailure {
+            runCatching { startActivity(Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)) }
+                .onFailure { toast(str(R.string.ui_audio_need_permission)) }
+        }
+    }
+
+    private fun audioClock(ms: Long): String =
+        String.format(Locale.US, "%d:%02d", ms / 60_000, (ms / 1000) % 60)
+
     // ---------------------------------------------------------------- live page
 
     /** 试听时用：没有本地监听时给出可读的提示。 */
@@ -1265,7 +1547,7 @@ class MainActivity : Activity() {
     @Volatile private var rootChecked = false
     private var rootChecking = false
     private val statusTicker = object : Runnable {
-        override fun run() { renderStatusState(); ui.postDelayed(this, 500) }
+        override fun run() { renderStatusState(); renderAudioState(); ui.postDelayed(this, 500) }
     }
 
     /** 状态页顶部那张卡：选游戏、音色、方案，然后直接开麦。旧实时变声卡片暂留在这张卡下面。 */
@@ -1628,6 +1910,7 @@ class MainActivity : Activity() {
         private const val RECORD = "record"
         private const val CONFIG = "config"
         private const val LIVE = "live"
+        private const val AUDIO = "audio"
         private const val SETTINGS = "settings"
     }
 }
