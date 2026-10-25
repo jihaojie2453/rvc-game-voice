@@ -1,5 +1,7 @@
 # RVC Voice Studio Mobile (Android)
 
+> ⚠️ 이 문서는 오래되었습니다(0.4.x 기준, Shizuku·웹 통화 시절). 최신 내용은 [README.md](README.md)를 보세요.
+
 [RVC](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI)(Retrieval-based Voice Conversion)를 바탕으로 만든 비공식 Android 목소리 변환 앱이에요. 변환 계산은 폰 안에서 하고, 녹음과 목소리 모델을 자동 업로드하지 않아요. 웹 통화에 연결하면 변환된 음성이 선택한 웹사이트로 전달돼요.
 
 [English README](README.md)

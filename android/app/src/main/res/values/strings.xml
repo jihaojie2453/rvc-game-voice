@@ -135,9 +135,6 @@
     <string name="ui_bit_npu">"16-bit NPU"</string>
     <string name="ui_cpu_threads">"CPU threads"</string>
     <string name="ui_device_settings_apply_to_the_next_file">"Device settings apply to the next file or live conversion. Virtual mic uses its own tested configuration."</string>
-    <string name="ui_diagnostics">"Diagnostics"</string>
-    <string name="ui_save_live_diagnostics_and_the_latest_live">"Save live diagnostics and the latest live recording to the VoiceStudio folder in Downloads for inspection on a PC."</string>
-    <string name="ui_export_diagnostics">"Export diagnostics"</string>
     <string name="ui_app_folder_version">"App folder: %1$s\nVersion %2$s"</string>
     <string name="ui_uses_the_cpu_for_the_front_end">"Uses the CPU for the front end and GPU or CPU for the decoder in 32-bit precision. Speed depends on the device."</string>
     <string name="ui_choose_devices_for_file_and_live_conversion">"Choose devices for file and live conversion. Unavailable accelerators fall back to CPU. The 16-bit NPU decoder is for comparison."</string>
@@ -181,7 +178,6 @@
     <string name="ui_could_not_start">"Could not start: %1$s"</string>
     <string name="ui_stopping">"Stopping…"</string>
     <string name="ui_saved_to_record_s">"Saved to Record: %1$s (%2$.1f s)"</string>
-    <string name="ui_saved_files_to_downloads_voicestudio_live">"Saved %2$s files to live_%1$s (Downloads → VoiceStudio)"</string>
     <string name="ui_normal">"Normal"</string>
     <string name="ui_slightly_warm">"Slightly warm"</string>
     <string name="ui_warm">"Warm"</string>

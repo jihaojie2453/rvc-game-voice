@@ -1,5 +1,7 @@
 # Voice Studio 사용법
 
+> ⚠️ 이 문서는 오래되었습니다(0.4.x 기준, Shizuku·웹 통화 시절). 최신 내용은 [USAGE.md](USAGE.md)를 보세요.
+
 [English](USAGE.md) · [컨버터 단계별 안내](../converter/USAGE.ko.md)
 
 ## 용도 고르기

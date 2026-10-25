@@ -126,9 +126,6 @@
     <string name="ui_bit_npu">"NPU 16비트"</string>
     <string name="ui_cpu_threads">"CPU 스레드"</string>
     <string name="ui_device_settings_apply_to_the_next_file">"계산 장치 설정은 다음 파일·실시간 변환부터 적용돼요. 가상 마이크는 별도의 검증된 설정을 사용해요."</string>
-    <string name="ui_diagnostics">"기록"</string>
-    <string name="ui_save_live_diagnostics_and_the_latest_live">"실시간 진단 기록과 마지막 실시간 녹음을 다운로드/VoiceStudio에 넣어요 (PC로 옮겨서 볼 수 있게)"</string>
-    <string name="ui_export_diagnostics">"기록 보내기"</string>
     <string name="ui_app_folder_version">"앱 폴더: %1$s\n버전 %2$s"</string>
     <string name="ui_uses_the_cpu_for_the_front_end">"앞 단계는 CPU, 디코더는 GPU 또는 CPU에서 32비트로 계산해요. 속도는 기기마다 달라요."</string>
     <string name="ui_choose_devices_for_file_and_live_conversion">"파일·실시간의 계산 장치를 골라요. 사용할 수 없는 가속기는 CPU로 전환해요. NPU 16비트는 비교용이에요."</string>
@@ -169,7 +166,6 @@
     <string name="ui_could_not_start">"켜지 못했어요: %1$s"</string>
     <string name="ui_stopping">"멈추는 중…"</string>
     <string name="ui_saved_to_record_s">"녹음 탭에 저장했어요: %1$s (%2$.1f초)"</string>
-    <string name="ui_saved_files_to_downloads_voicestudio_live">"다운로드/VoiceStudio/live_%1$s 에 파일 %2$s개를 넣었어요"</string>
     <string name="ui_normal">"정상"</string>
     <string name="ui_slightly_warm">"약간 따뜻함"</string>
     <string name="ui_warm">"따뜻함"</string>
