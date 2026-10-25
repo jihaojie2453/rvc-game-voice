@@ -90,6 +90,13 @@ class LiveCore(private val rvc: Rvc, val params: LiveParams) {
     private var peakAt = 0
     private var peakFilled = 0
     private val peakSorted = FloatArray(128)
+    // 每块各 10 ms 帧的 RMS（块最大 50 帧）与排序副本：说话判定取中位数，单帧咔哒抬不动它
+    private val frameRms = FloatArray(50)
+    private val frameSorted = FloatArray(50)
+    // 静音停推：连续这么久没有语音就整块跳过（模型不跑，输出静音）
+    private val skipAfterBlocks = max(1, 1500 / (params.block * 10))
+    private var idleBlocks = 0
+    private var skipping = false
     @Volatile private var threshold = 10.0.pow(params.thresholdDb / 20).toFloat()
     @Volatile var gain = 10.0.pow(params.gainDb / 20).toFloat()
 
@@ -115,6 +122,9 @@ class LiveCore(private val rvc: Rvc, val params: LiveParams) {
      *  soft clip had to bend it. */
     var lastInPeak = 0f
         private set
+    /** 这一块各 10 ms 帧 RMS 的中位数（不是峰值）：绿灯的说话判定用它，单点咔哒会被忽略。 */
+    var lastInRms = 0f
+        private set
     var lastRawPeak = 0f
         private set
     var lastClipped = false
@@ -134,12 +144,30 @@ class LiveCore(private val rvc: Rvc, val params: LiveParams) {
         holdLeft = 0
     }
 
+    /** 本块各 10 ms 帧 RMS 的中位数：持续人声抬得起来，1–2 ms 的咔哒只影响一帧、被中位数忽略。 */
+    private fun medianFrameRms(): Float {
+        System.arraycopy(frameRms, 0, frameSorted, 0, b)
+        java.util.Arrays.sort(frameSorted, 0, b)
+        return frameSorted[b / 2]
+    }
+
+    /** 从 x[from, from + b*480) 现算各 10 ms 帧的 RMS，返回中位数。模型跑之前的说话预判用它。 */
+    private fun medianFrameRmsAt(x: FloatArray, from: Int): Float {
+        for (f in 0 until b) {
+            val a = from + f * 480
+            var e = 0f
+            for (k in a until a + 480) e += x[k] * x[k]
+            frameRms[f] = sqrt(e / 480)
+        }
+        return medianFrameRms()
+    }
+
     /**
-     * 这一块算不算「在说话」：峰值要比最近 ~30 秒的第 20 百分位（环境底噪）高 8 dB，并且高于静音阈值的 2 倍。
-     * 只看电平，不改任何音频；游戏占着麦克风但没人说话时，环境声到不了这个线，绿灯就不会亮。
+     * 这一块算不算「在说话」：帧 RMS 中位数要比最近 ~30 秒的第 20 百分位（环境底噪）高 8 dB，
+     * 并且高于静音阈值的 2 倍。只看电平，不改任何音频。
      */
-    private fun judgeSpeech(peak: Float): Boolean {
-        peakRing[peakAt] = peak
+    private fun judgeSpeech(level: Float): Boolean {
+        peakRing[peakAt] = level
         peakAt = (peakAt + 1) % peakRing.size
         if (peakFilled < peakRing.size) peakFilled++
         val n = peakFilled
@@ -147,23 +175,36 @@ class LiveCore(private val rvc: Rvc, val params: LiveParams) {
         System.arraycopy(peakRing, 0, peakSorted, 0, n)
         java.util.Arrays.sort(peakSorted, 0, n)
         val floor = peakSorted[(n * 2) / 10]
-        return peak > max(floor * 2.51f, threshold * 2f)
+        return level > max(floor * 2.51f, threshold * 2f)
     }
+
+    /**
+     * 跳过判据：帧 RMS 中位数要低于「静音阈值的 2 倍」才允许跳过。
+     * 直接用用户自己的阈值当锚点（不跟底噪自适应），避免连续说话时底噪被抬高、把正在说的话判成静音。
+     */
+    private fun hasVoice(level: Float): Boolean = level > threshold * 2f
 
     /** x48: the newest [w48] samples at 48 kHz (the step's block last). Returns [b48] samples for the earphones. */
     fun step(x48: FloatArray, st: Rvc.Settings, bypass: Boolean = false, allowQuietSkip: Boolean = true): FloatArray {
         require(x48.size == w48)
         val t0 = System.nanoTime()
         lastSkippedQuiet = false
-        if (params.skipQuiet && allowQuietSkip && !bypass && isQuietContext(x48, threshold)) {
-            reset()
+        // 便宜的说话预判：只看最新这一块。没语音就不跑模型——输出本来也是静音（门限关着），音质不受影响。
+        val level = medianFrameRmsAt(x48, w48 - b48)
+        val speaking = judgeSpeech(level)
+        idleBlocks = if (hasVoice(level)) 0 else idleBlocks + 1
+        if (params.skipQuiet && allowQuietSkip && !bypass &&
+            (idleBlocks >= skipAfterBlocks || isQuietContext(x48, threshold))) {
+            if (!skipping) { reset(); skipping = true }
             lastSkippedQuiet = true
             lastInPeak = x48.maxOfOrNull { abs(it) } ?: 0f
-            lastSpoke = judgeSpeech(lastInPeak)
+            lastInRms = level
+            lastSpoke = speaking
             lastRawPeak = 0f; lastClipped = false
             lastPrepMs = (System.nanoTime() - t0) / 1e6; lastPostMs = 0.0
             return FloatArray(b48)
         }
+        skipping = false
         val x16 = if (bypass) null else fit(downsampler.process(x48,b48), window * 160)
         val t1 = System.nanoTime()
         val y = if (x16 == null) x48.copyOfRange(w48 - tail * 480, w48)
@@ -196,7 +237,8 @@ class LiveCore(private val rvc: Rvc, val params: LiveParams) {
             val a = f * 480
             var energy = 0f
             for (k in a until a + 480) energy += input[k] * input[k]
-            if (sqrt(energy / 480) >= threshold) holdLeft = gateHold
+            frameRms[f] = sqrt(energy / 480)
+            if (frameRms[f] >= threshold) holdLeft = gateHold
             for (k in a until a + 480) {
                 gate = if (holdLeft > 0) min(1f, gate + gateAttack) else max(0f, gate - gateRelease)
                 if (holdLeft > 0) holdLeft--
@@ -210,7 +252,8 @@ class LiveCore(private val rvc: Rvc, val params: LiveParams) {
         }
         if (clipped) clips++
         lastInPeak = inPeak
-        lastSpoke = judgeSpeech(inPeak)
+        lastInRms = level
+        lastSpoke = speaking
         lastRawPeak = rawPeak
         lastClipped = clipped
         lastPostMs = (System.nanoTime() - t2) / 1e6

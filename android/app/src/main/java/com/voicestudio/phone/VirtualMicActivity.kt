@@ -81,6 +81,8 @@ object VirtualMicSession {
     /** 最后一次真正产生音频的 elapsedRealtime；用来判断“是不是真的在变声”。 */
     @Volatile var lastAudioAt = 0L
         private set
+    /** 最近一块的输入 RMS，只给悬浮窗日志看（排查绿点用）。 */
+    @Volatile var lastRms = 0f
 
     fun noteAudio() { lastAudioAt = android.os.SystemClock.elapsedRealtime() }
 
@@ -307,6 +309,7 @@ object VirtualMicSession {
                             continue
                         }
                         meter = Meter(core.lastInPeak, core.lastRawPeak, ms, drops)
+                        VirtualMicSession.lastRms = core.lastInRms
                         // 绿点只认「真的在说话」：游戏占着麦克风、只有环境声时不点亮。
                         if (core.lastSpoke) VirtualMicSession.noteAudio()
                         if (!running) break
