@@ -353,7 +353,7 @@ class OverlayService : Service() {
         val live = streaming
         if (android.os.SystemClock.elapsedRealtime() - lastTrace > 2000) {
             lastTrace = android.os.SystemClock.elapsedRealtime()
-            android.util.Log.i("VoiceStudio", "OVERLAY live=$live streaming=$streaming phase=$phase lastAudio=${VirtualMicSession.lastAudioAt} inPeak=${VirtualMicSession.meter.input} active=${RootMicController.active}")
+            android.util.Log.i("VoiceStudio", "OVERLAY live=$live streaming=$streaming phase=$phase lastAudio=${VirtualMicSession.lastAudioAt} inPeak=${VirtualMicSession.meter.input} inRms=${VirtualMicSession.lastRms} active=${RootMicController.active}")
         }
         dot?.background = circle(if (live) green else red, dp(20))
         // 只有「改了必须重启才生效」的参数时才点亮重开会话，否则灰着
