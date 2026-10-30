@@ -90,15 +90,25 @@ class OverlayService : Service() {
     private var audioHighlight: String? = null
     private var rowOn: GradientDrawable? = null
 
+    // ---- 闭麦专属悬浮窗（第三个窗口）----
+    private var muteRoot: LinearLayout? = null
+    private var muteBadge: MicBadgeView? = null
+    /** 返音开着、又是在外放时显示的那行提醒。 */
+    private var monitorHint: TextView? = null
+    private var speakerAt = 0L
+    private var speakerOut = false
+
     private val prefs by lazy { getSharedPreferences("phone", Context.MODE_PRIVATE) }
     private val modelsDir by lazy { File(getExternalFilesDir(null), "models") }
 
     private val red = Color.parseColor("#E5484D")
     private val green = Color.parseColor("#30A46C")
+    private val amber = Color.parseColor("#FFB020")
 
     private val tick = object : Runnable {
         override fun run() {
             renderAudio()
+            renderMute()
             renderState()
             ui.postDelayed(this, 300)
         }
@@ -109,6 +119,9 @@ class OverlayService : Service() {
     override fun onCreate() {
         super.onCreate()
         wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        // 音频那几个开关是持久化的；服务先起来时也要把它们放回 AudioDeck（setMonitor 是幂等的）
+        AudioDeck.setMonitorGain(prefs.getFloat("audio_monitor_gain_db", -6f))
+        AudioDeck.setMonitor(prefs.getBoolean("audio_monitor", false))
         addOverlay()
         ui.post(tick)
         visible = true
@@ -121,6 +134,8 @@ class OverlayService : Service() {
         root = null
         audioRoot?.let { runCatching { wm.removeView(it) } }
         audioRoot = null
+        muteRoot?.let { runCatching { wm.removeView(it) } }
+        muteRoot = null
         super.onDestroy()
     }
 
@@ -211,26 +226,37 @@ class OverlayService : Service() {
             setParam(VoiceProfiles.GROUP_ENGINE, "live_threshold_db", v)
         }
 
+        // 四个按钮一行会挤到看不清字，改成 2×2
         val actions = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
+            orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) }
         }
+        val row1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val restart = Button(this, null, 0, R.style.SoftButton).apply {
             text = str(R.string.ui_overlay_restart); textSize = 12f
             setOnClickListener { restartSession() }
         }
         restartButton = restart
-        actions.addView(restart, LinearLayout.LayoutParams(0, dp(42), 1.15f))
+        row1.addView(restart, LinearLayout.LayoutParams(0, dp(42), 1f))
+        val mute = Button(this, null, 0, R.style.SoftButton).apply {
+            text = str(R.string.ui_overlay_mute); textSize = 12f
+            setOnClickListener { toggleMuteWindow() }
+        }
+        row1.addView(mute, LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginStart = dp(8) })
+        actions.addView(row1)
+
+        val row2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val audio = Button(this, null, 0, R.style.SoftButton).apply {
             text = str(R.string.ui_audio); textSize = 12f
             setOnClickListener { showAudioOverlay() }
         }
-        actions.addView(audio, LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginStart = dp(8) })
+        row2.addView(audio, LinearLayout.LayoutParams(0, dp(42), 1f))
         val quit = Button(this, null, 0, R.style.SoftButton).apply {
             text = str(R.string.ui_overlay_quit); textSize = 12f
             setOnClickListener { quitEverything() }
         }
-        actions.addView(quit, LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginStart = dp(8) })
+        row2.addView(quit, LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginStart = dp(8) })
+        actions.addView(row2, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
         body.addView(actions)
         drag(title, { root })
 
@@ -254,6 +280,8 @@ class OverlayService : Service() {
 
         // 初始数据
         ui.post { reloadChoices() }
+        // 上次开着闭麦按钮的话接着开着：打游戏时少点两下
+        if (prefs.getBoolean("overlay_mute", false)) ui.post { setMuteWindowVisible(true) }
     }
 
     private fun rowLabel(text: String): TextView = TextView(this).apply {
@@ -374,14 +402,15 @@ class OverlayService : Service() {
         }
         idleSince = 0L
         val phase = RootMicController.phase
+        val muted = VirtualMicSession.muted
         // 绿 = 最近 2.5 秒里真的有人在说话。phase == RUNNING 只代表桥接通道已连接：游戏占着麦克风时
         // 一直静音也会是 RUNNING，拿它兜底就会「没说话也一直显示变声中」。
         val streaming = VirtualMicSession.lastAudioAt > 0 &&
             android.os.SystemClock.elapsedRealtime() - VirtualMicSession.lastAudioAt < 2500
-        val live = streaming
+        val live = streaming && !muted
         if (android.os.SystemClock.elapsedRealtime() - lastTrace > 2000) {
             lastTrace = android.os.SystemClock.elapsedRealtime()
-            android.util.Log.i("VoiceStudio", "OVERLAY live=$live streaming=$streaming phase=$phase lastAudio=${VirtualMicSession.lastAudioAt} inPeak=${VirtualMicSession.meter.input} inRms=${VirtualMicSession.lastRms} active=${RootMicController.active}")
+            android.util.Log.i("VoiceStudio", "OVERLAY live=$live streaming=$streaming phase=$phase muted=$muted lastAudio=${VirtualMicSession.lastAudioAt} inPeak=${VirtualMicSession.meter.input} inRms=${VirtualMicSession.lastRms} active=${RootMicController.active}")
         }
         dot?.background = circle(if (live) green else red, dp(20))
         // 只有「改了必须重启才生效」的参数时才点亮重开会话，否则灰着
@@ -390,6 +419,7 @@ class OverlayService : Service() {
         restartButton?.alpha = if (canRestart) 1f else 0.38f
         (collapsed?.getChildAt(1) as? TextView)?.text = when {
             switching?.visibility == View.VISIBLE -> str(R.string.ui_overlay_switching)
+            muted -> str(R.string.ui_overlay_muted)
             live -> str(R.string.ui_overlay_live)
             phase == MicPhase.WAITING -> str(R.string.ui_overlay_waiting)
             phase == MicPhase.BUFFERING -> str(R.string.ui_preparing_audio)
@@ -583,6 +613,73 @@ class OverlayService : Service() {
         }
     }
 
+    // ---------------------------------------------------------------- 闭麦悬浮按钮（第三个窗口）
+
+    /** 主面板的「闭麦」按钮：把闭麦按钮挂到屏幕上，再点一次收起。 */
+    private fun toggleMuteWindow() = setMuteWindowVisible(muteRoot?.visibility != View.VISIBLE)
+
+    private fun setMuteWindowVisible(on: Boolean) {
+        if (on) {
+            if (muteRoot == null) createMuteWindow()
+            muteRoot?.visibility = View.VISIBLE
+        } else {
+            // 收起图标必须同时解掉闭麦：否则界面上再没有入口能把它开回来
+            if (VirtualMicSession.muted) VirtualMicSession.setMuted(false)
+            muteRoot?.visibility = View.GONE
+        }
+        prefs.edit().putBoolean("overlay_mute", on).apply()
+        renderMute()
+    }
+
+    /** 一颗会变色的麦克风按钮：点一下闭麦、再点一下开麦；按住可以拖位置。 */
+    private fun createMuteWindow() {
+        val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val badge = MicBadgeView(this).apply {
+            tint = if (VirtualMicSession.muted) red else green
+            slashed = VirtualMicSession.muted
+        }
+        column.addView(badge, LinearLayout.LayoutParams(dp(44), dp(44)))
+        drag(badge, { muteRoot }) {
+            VirtualMicSession.setMuted(!VirtualMicSession.muted)
+            renderMute()
+            renderState()
+        }
+        muteBadge = badge
+        muteRoot = column
+        val lp = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            android.graphics.PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = dp(16); y = dp(300)
+        }
+        runCatching { wm.addView(column, lp) }.onFailure { muteRoot = null }
+    }
+
+    /**
+     * 闭麦按钮的颜色：红 = 闭麦；黄 = 已经点了开麦、但音频还没真的送出去；绿 = 送出去了。
+     * 「送出去」看最近一次写进 socket 的时间，所以游戏没在录音时它会一直黄着——那正是真话。
+     */
+    private fun renderMute() {
+        val badge = muteBadge ?: return
+        val now = android.os.SystemClock.elapsedRealtime()
+        val muted = VirtualMicSession.muted
+        val flowing = VirtualMicSession.lastBlockAt > 0 &&
+            now - VirtualMicSession.lastBlockAt < 1200
+        // 开麦几乎是瞬间完成的；给黄色一个最短露脸时间，否则根本看不见它
+        val settled = now - VirtualMicSession.muteChangedAt >= 500
+        badge.tint = when {
+            muted -> red
+            flowing && settled -> green
+            else -> amber
+        }
+        badge.slashed = muted
+    }
+
     // ---------------------------------------------------------------- 音频悬浮窗（第二个窗口）
 
     /** 主面板上的「音频」按钮：第一次点建窗口，之后只是重新露出来。 */
@@ -669,7 +766,32 @@ class OverlayService : Service() {
             }
         })
 
+        // 返音：素材除了送进麦克风，也从本机出声
+        body.addView(Switch(this).apply {
+            text = str(R.string.ui_audio_monitor)
+            textSize = 12f
+            setTextColor(Color.WHITE)
+            isChecked = AudioDeck.monitor
+            setPadding(0, dp(6), 0, 0)
+            setOnCheckedChangeListener { _, checked ->
+                AudioDeck.setMonitor(checked)
+                prefs.edit().putBoolean("audio_monitor", checked).apply()
+                if (checked) warnMonitorOnce()
+            }
+        })
+        val hint = TextView(this).apply {
+            text = str(R.string.ui_audio_monitor_speaker)
+            textSize = 10f
+            setTextColor(amber)
+            setPadding(0, dp(4), 0, 0)
+            maxLines = 3
+            visibility = View.GONE
+        }
+        monitorHint = hint
+        body.addView(hint)
+
         audioVolume(body)
+        monitorVolume(body)
 
         val toggle = Button(this, null, 0, R.style.SoftButton).apply {
             text = str(R.string.ui_audio_stop)
@@ -799,6 +921,8 @@ class OverlayService : Service() {
     /** 每 300 ms：按钮文案、状态行、当前音频的高亮。 */
     private fun renderAudio() {
         if (audioRoot == null) return
+        monitorHint?.visibility =
+            if (AudioDeck.monitor && MonitorRoute.onSpeaker(this)) View.VISIBLE else View.GONE
         val state = AudioDeck.state
         val name = AudioDeck.track?.name ?: ""
         audioToggle?.text = if (state == AudioDeck.State.PAUSED) str(R.string.ui_audio_continue)
@@ -864,6 +988,52 @@ class OverlayService : Service() {
             })
         }
         parent.addView(bar, LinearLayout.LayoutParams(-1, dp(28)))
+    }
+
+    /** 返音音量：只影响自己听到的那一路，和发给队友的音量分开。 */
+    private fun monitorVolume(parent: LinearLayout) {
+        val head = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(10), 0, 0)
+        }
+        head.addView(TextView(this).apply {
+            text = str(R.string.ui_audio_monitor_volume); textSize = 11f; setTextColor(Color.parseColor("#C9C9D1"))
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        val value = TextView(this).apply { textSize = 11f; setTextColor(Color.WHITE) }
+        head.addView(value)
+        parent.addView(head)
+        val min = -24.0
+        val max = 12.0
+        fun label(v: Float) = String.format(Locale.US, "%+.0f dB", v)
+        val bar = SeekBar(this).apply {
+            this.max = (max - min).toInt()
+            progress = (AudioDeck.monitorGainDb - min).roundToInt().coerceIn(0, this.max)
+            setPadding(dp(2), 0, dp(2), 0)
+            value.text = label(AudioDeck.monitorGainDb)
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
+                    value.text = label((min + p).toFloat())
+                }
+
+                override fun onStartTrackingTouch(sb: SeekBar?) {}
+
+                override fun onStopTrackingTouch(sb: SeekBar?) {
+                    val db = (min + (sb?.progress ?: 0)).toFloat()
+                    AudioDeck.setMonitorGain(db)
+                    prefs.edit().putFloat("audio_monitor_gain_db", db).apply()
+                }
+            })
+        }
+        parent.addView(bar, LinearLayout.LayoutParams(-1, dp(28)))
+    }
+
+    /** 外放时提醒一次：音乐会从麦克风串回游戏。戴耳机不提醒。 */
+    private fun warnMonitorOnce() {
+        if (!MonitorRoute.onSpeaker(this)) return
+        if (prefs.getBoolean(MonitorRoute.WARNED, false)) return
+        prefs.edit().putBoolean(MonitorRoute.WARNED, true).apply()
+        Toast.makeText(this, str(R.string.ui_audio_monitor_speaker), Toast.LENGTH_LONG).show()
     }
 
     private fun clock(ms: Long): String =

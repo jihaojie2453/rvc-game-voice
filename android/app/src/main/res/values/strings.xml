@@ -451,4 +451,9 @@
     <string name="ui_audio_waiting_mic">Waiting for the game to take the microphone</string>
     <string name="ui_audio_failed">Could not play %1$s</string>
     <string name="ui_audio_need_session">Start the virtual microphone first</string>
+    <string name="ui_overlay_mute">Mute</string>
+    <string name="ui_overlay_muted">Mic muted</string>
+    <string name="ui_audio_monitor">Monitor</string>
+    <string name="ui_audio_monitor_volume">Monitor volume</string>
+    <string name="ui_audio_monitor_speaker">On the tablet speaker the microphone hears the music, so the game gets a second, voiced copy. Headphones avoid this.</string>
 </resources>

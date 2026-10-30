@@ -452,4 +452,9 @@
     <string name="ui_audio_waiting_mic">等待游戏占用麦克风</string>
     <string name="ui_audio_failed">无法播放 %1$s</string>
     <string name="ui_audio_need_session">请先启动虚拟麦克风</string>
+    <string name="ui_overlay_mute">闭麦</string>
+    <string name="ui_overlay_muted">已闭麦</string>
+    <string name="ui_audio_monitor">返音</string>
+    <string name="ui_audio_monitor_volume">返音音量</string>
+    <string name="ui_audio_monitor_speaker">外放时麦克风会收到音乐，游戏里会多出一层变声后的音乐；戴耳机就没有这个问题。</string>
 </resources>

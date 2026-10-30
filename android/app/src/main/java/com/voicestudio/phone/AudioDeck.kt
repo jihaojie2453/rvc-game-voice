@@ -1,6 +1,8 @@
 package com.voicestudio.phone
 
+import android.media.AudioAttributes
 import android.media.AudioFormat
+import android.media.AudioTrack
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
@@ -404,12 +406,26 @@ object AudioDeck {
     @Volatile var gainDb = -12f
         private set
 
+    /**
+     * 返音：素材不光送进麦克风，也从本机出声（自己听）。开关和音量是独立的两套——
+     * 发给队友的音量和自己听的音量不是一回事。
+     */
+    @Volatile var monitor = false
+        private set
+    @Volatile var monitorGainDb = -6f
+        private set
+
     @Volatile private var gain = 10.0.pow(-12.0 / 20.0).toFloat()
     @Volatile private var pcm: Pcm? = null
     @Volatile private var position = 0
     @Volatile private var gapLeft = 0
     @Volatile private var generation = 0
     private var loader: Thread? = null
+    private var monitorThread: Thread? = null
+    /** 返音时钟自己听到的位置（采样下标）；-1 表示这个时钟现在没在走。 */
+    @Volatile private var monitorPos = -1
+    /** 返音时钟还剩下的循环间隔采样数。 */
+    @Volatile private var monitorGap = 0
 
     /** 最近一块「变声 + 素材」相加后的峰值（削顶前）和已经削顶过的块数，进会话日志查问题用。 */
     @Volatile var lastPeak = 0f
@@ -427,6 +443,119 @@ object AudioDeck {
         gain = 10.0.pow(db / 20.0).toFloat()
     }
 
+    fun setMonitorGain(db: Float) {
+        monitorGainDb = db
+    }
+
+    /**
+     * 返音开关。开：游标接到「现在正在送出去的位置」，两边听到的是同一段。
+     * 关：把送出位置接回监听位置，免得开麦后倒回去重放一截。
+     */
+    @Synchronized
+    fun setMonitor(on: Boolean) {
+        if (on == monitor) return
+        if (on) {
+            monitorPos = position.coerceAtLeast(0)
+            monitor = true
+            monitorThread = thread(name = "audio-monitor") { monitorLoop() }
+        } else {
+            monitor = false
+            if (monitorPos >= 0) position = monitorPos
+            monitorPos = -1
+            monitorGap = 0
+            monitorThread?.join(400)
+            monitorThread = null
+        }
+        android.util.Log.i("AudioDeck", "monitor=$on at ${position * 1000L / RATE}ms")
+    }
+
+    /**
+     * 返音时钟：按实时把素材写进本机输出。它自己是时钟，所以游戏没占麦、这块根本送不出去时，
+     * 音乐照样连续；等能送的时候再从「你正在听的位置」接着送。
+     */
+    private fun monitorLoop() {
+        val chunk = 960                     // 20 ms
+        val buf = FloatArray(chunk)
+        var out: AudioTrack? = null
+        try {
+            while (monitor) {
+                val clip = pcm
+                if (clip == null || state != State.PLAYING) {
+                    // 没在放就停住轨道（残留缓冲要冲掉），游标留着，续播从原地开始
+                    out?.let {
+                        runCatching {
+                            if (it.playState == AudioTrack.PLAYSTATE_PLAYING) { it.pause(); it.flush() }
+                        }
+                    }
+                    Thread.sleep(20)
+                    continue
+                }
+                val t = out ?: buildMonitorTrack().also {
+                    out = it
+                    it.play()
+                }
+                if (t.playState != AudioTrack.PLAYSTATE_PLAYING) t.play()
+                if (monitorPos < 0) monitorPos = 0
+                if (monitorGap > 0) {
+                    val n = min(monitorGap, chunk)
+                    for (k in 0 until n) buf[k] = 0f
+                    t.write(buf, 0, n, AudioTrack.WRITE_BLOCKING)
+                    monitorGap -= n
+                    continue
+                }
+                if (monitorPos >= clip.size) {
+                    if (loop) { monitorPos = 0; monitorGap = GAP_SAMPLES; continue }
+                    monitorEnded()
+                    continue
+                }
+                val at = monitorPos
+                val n = min(chunk, clip.size - at)
+                val g = 10.0.pow(monitorGainDb / 20.0).toFloat() / 32768f
+                val data = clip.data
+                for (k in 0 until n) buf[k] = data[at + k] * g
+                t.write(buf, 0, n, AudioTrack.WRITE_BLOCKING)
+                monitorPos = at + n
+                position = monitorPos      // 界面进度跟着监听时钟走
+            }
+        } catch (e: Throwable) {
+            android.util.Log.w("AudioDeck", "monitor stopped", e)
+        } finally {
+            runCatching { out?.stop() }
+            runCatching { out?.release() }
+            monitorPos = -1
+            // 时钟没了就不能再让 mix 走监听分支，否则会彻底没声音
+            monitor = false
+        }
+    }
+
+    private fun buildMonitorTrack(): AudioTrack = AudioTrack.Builder()
+        .setAudioAttributes(
+            AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                .build(),
+        )
+        .setAudioFormat(
+            AudioFormat.Builder()
+                .setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
+                .setSampleRate(RATE)
+                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                .build(),
+        )
+        .setTransferMode(AudioTrack.MODE_STREAM)
+        .setBufferSizeInBytes(RATE / 5 * 4)     // 0.2 s
+        .build()
+
+    @Synchronized
+    private fun monitorEnded() {
+        if (state != State.PLAYING) return
+        state = State.IDLE
+        position = 0
+        gapLeft = 0
+        monitorPos = -1
+        android.util.Log.i("AudioDeck", "ended (monitor) track=${track?.name}")
+    }
+
     /** 点一次发送一次：同一首正在发就忽略；换了就立刻打断重来。 */
     @Synchronized
     fun play(t: AudioLibrary.Track) {
@@ -435,6 +564,7 @@ object AudioDeck {
         if (same && pcm != null) {
             position = 0
             gapLeft = 0
+            monitorPos = -1          // 让返音时钟从新位置重新对表
             failure = Failure.NONE
             failureDetail = null
             state = State.PLAYING
@@ -452,6 +582,7 @@ object AudioDeck {
         pcm = null
         position = 0
         gapLeft = 0
+        monitorPos = -1
         failure = Failure.NONE
         failureDetail = null
         state = State.LOADING
@@ -510,6 +641,8 @@ object AudioDeck {
         pcm = null
         position = 0
         gapLeft = 0
+        monitorPos = -1
+        monitorGap = 0
         failure = Failure.NONE
         failureDetail = null
     }
@@ -521,6 +654,8 @@ object AudioDeck {
     fun mix(y: FloatArray) {
         val clip = pcm ?: return
         if (state != State.PLAYING) return
+        // 开了返音就由监听时钟当主时钟：游戏听到的正是你此刻听到的那一段
+        if (monitor) { mixMonitored(clip, y); return }
         val token = generation
         var i = 0
         var p = position
@@ -572,6 +707,29 @@ object AudioDeck {
             position = 0
             gapLeft = 0
         }
+    }
+
+    /**
+     * 返音模式：这里的游标不再自己往前走，按监听时钟取窗——游戏听到的和你自己听到的是同一段。
+     * 游戏没占麦时这个方法根本不会被调用，监听时钟照样走（产品要的行为）。
+     */
+    private fun mixMonitored(clip: Pcm, y: FloatArray) {
+        val at = monitorPos
+        if (at < 0 || monitorGap > 0) return
+        val g = gain / 32768f
+        val data = clip.data
+        val n = min(y.size, clip.size - at).coerceAtLeast(0)
+        var peak = 0f
+        var over = false
+        for (k in 0 until n) {
+            val sum = y[k] + data[at + k] * g
+            val a = if (sum < 0) -sum else sum
+            if (a > peak) peak = a
+            if (a > 1f) over = true
+            y[k] = LiveCore.softClip(sum)
+        }
+        lastPeak = peak
+        if (over) clippedBlocks++
     }
 
     /** 调试：解码后的 48k 单声道 PCM 存成 wav，用来在电脑上验频谱。 */
