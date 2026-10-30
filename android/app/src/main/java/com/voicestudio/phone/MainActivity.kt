@@ -127,6 +127,8 @@ class MainActivity : Activity() {
         // 本地音频：每次打开 App 扫一次目录（使用过程中不刷新，产品决定）
         AudioDeck.setGain(prefs.getFloat("audio_gain_db", -12f))
         AudioDeck.loop = prefs.getBoolean("audio_loop", false)
+        AudioDeck.setMonitorGain(prefs.getFloat("audio_monitor_gain_db", -6f))
+        AudioDeck.setMonitor(prefs.getBoolean("audio_monitor", false))
         // 调试：有 debug_hooks 时把解码结果落成 wav，方便在电脑上验频谱
         if (File(base, "debug_hooks").isFile) AudioDeck.dumpDir = File(base, "audio_debug").apply { mkdirs() }
         reloadAudio()
@@ -1241,6 +1243,7 @@ class MainActivity : Activity() {
     private var audioTrackHost: LinearLayout? = null
     private var audioCount: TextView? = null
     private var audioStatus: TextView? = null
+    private var audioMonitorHint: TextView? = null
     private var audioToggleButton: Button? = null
     private var audioGrant: Button? = null
     private var audioGrantHint: TextView? = null
@@ -1340,6 +1343,45 @@ class MainActivity : Activity() {
             if (done) {
                 AudioDeck.setGain(db)
                 prefs.edit().putFloat("audio_gain_db", db).apply()
+            }
+        })
+        // 返音：素材除了送进麦克风，也从本机出声
+        control.addView(Switch(this).apply {
+            text = str(R.string.ui_audio_monitor)
+            textSize = 13f
+            isChecked = AudioDeck.monitor
+            setPadding(0, dp(8), 0, 0)
+            setOnCheckedChangeListener { _, checked ->
+                AudioDeck.setMonitor(checked)
+                prefs.edit().putBoolean("audio_monitor", checked).apply()
+                val speaker = MonitorRoute.onSpeaker(this@MainActivity)
+                audioMonitorHint?.visibility = if (checked && speaker) View.VISIBLE else View.GONE
+                if (checked && speaker && !prefs.getBoolean(MonitorRoute.WARNED, false)) {
+                    prefs.edit().putBoolean(MonitorRoute.WARNED, true).apply()
+                    Toast.makeText(this@MainActivity, str(R.string.ui_audio_monitor_speaker), Toast.LENGTH_LONG).show()
+                }
+            }
+        })
+        val monitorHint = TextView(this).apply {
+            text = str(R.string.ui_audio_monitor_speaker)
+            textSize = 11f
+            setTextColor(getColor(R.color.muted))
+            setPadding(0, dp(4), 0, 0)
+            maxLines = 3
+            visibility = if (AudioDeck.monitor && MonitorRoute.onSpeaker(this@MainActivity)) View.VISIBLE else View.GONE
+        }
+        audioMonitorHint = monitorHint
+        control.addView(monitorHint)
+        val monitorValue = valueText()
+        val monitorBar = sliderRow(control, str(R.string.ui_audio_monitor_volume), monitorValue, "-24", "+12", 36)
+        monitorBar.progress = (AudioDeck.monitorGainDb + 24f).roundToInt().coerceIn(0, 36)
+        monitorValue.text = String.format(Locale.US, "%+.0f dB", AudioDeck.monitorGainDb)
+        monitorBar.setOnSeekBarChangeListener(slider { p, done ->
+            val db = -24f + p
+            monitorValue.text = String.format(Locale.US, "%+.0f dB", db)
+            if (done) {
+                AudioDeck.setMonitorGain(db)
+                prefs.edit().putFloat("audio_monitor_gain_db", db).apply()
             }
         })
         val statusLabel = TextView(this).apply {
@@ -1463,6 +1505,9 @@ class MainActivity : Activity() {
     /** 每 500 ms 跟一次播放状态：按钮文案、状态行、当前音频高亮。 */
     private fun renderAudioState() {
         if (page != AUDIO && audioStatus == null) return
+        // 插上/拔掉耳机时提示要跟着变
+        audioMonitorHint?.visibility =
+            if (AudioDeck.monitor && MonitorRoute.onSpeaker(this)) View.VISIBLE else View.GONE
         val state = AudioDeck.state
         val name = AudioDeck.track?.name ?: ""
         audioToggleButton?.text =

@@ -86,6 +86,29 @@ object VirtualMicSession {
 
     fun noteAudio() { lastAudioAt = android.os.SystemClock.elapsedRealtime() }
 
+    /**
+     * 闭麦：只停「人声」这一路——不跑推理、回注整块静音，NPU 同时空出来。
+     * 本地音频（[AudioDeck]）在后面照旧叠加，所以队友听不到你说话、照样听得到素材。
+     * 不碰桥接：游戏那边一直以为麦克风开着，这正是「不用进游戏设置就能闭嘴」的意思。
+     */
+    @Volatile var muted = false
+        private set
+    /** 闭麦状态最后一次变化的时间；悬浮窗靠它让「正在开麦」的黄色至少露一下脸。 */
+    @Volatile var muteChangedAt = 0L
+        private set
+    /** 最近一次真的往 socket 写进一块的时间；悬浮窗用新鲜度判断这条路现在通不通。 */
+    @Volatile var lastBlockAt = 0L
+        private set
+
+    fun noteBlock() { lastBlockAt = android.os.SystemClock.elapsedRealtime() }
+
+    fun setMuted(value: Boolean) {
+        if (value == muted) return
+        muted = value
+        muteChangedAt = android.os.SystemClock.elapsedRealtime()
+        android.util.Log.i("VirtualMic", "MUTE muted=$value")
+    }
+
     fun applyEngine(key: String, value: Double) {
         when (key) {
             "live_input_gain_db" -> inGain = 10.0.pow(value / 20.0).toFloat()
@@ -279,6 +302,8 @@ object VirtualMicSession {
             var inputPeak = 0f
             var outputPeak = 0f
             var quietSteps = 0
+            var mutedSteps = 0
+            var mutedBefore = false
             var lastReport = 0L
             val csvHeader = "step,compute_ms,backlog_ms,input_peak,output_peak,clips,quiet_skip,prep_ms,hubert_ms,rmvpe_ms,enc_ms,dec_ms,other_ms,post_ms\n"
             val csvWriter = if (intent.getBooleanExtra("bounded_logs", false)) RotatingTextWriter(File(dir,"blocks.csv"), csvHeader)
@@ -299,10 +324,27 @@ object VirtualMicSession {
                         val have = ring.total
                         if (have-consumed > core.b48*3) { consumed = have-core.b48; core.reset(); drops++ }
                         consumed += core.b48
-                        val x = ring.copy(consumed-core.w48,core.w48,contextStart)
+                        val muted = VirtualMicSession.muted
                         val start = System.nanoTime()
                         val before = engine!!.timing.copyOf()
-                        val y = core.step(x,settings)
+                        val y: FloatArray
+                        if (muted) {
+                            // 闭麦：人声这一路不跑推理、整块静音。本地音频还在下面照常叠加，
+                            // 所以队友听不到你说话，但照样听得到素材（产品决定）。
+                            if (!mutedBefore) { core.reset(); log("MUTE_ENTER") }
+                            y = FloatArray(core.b48)
+                        } else {
+                            // 刚开麦时上一段留下的窗口/SOLA 状态已经对不上了，重来一遍再接
+                            if (mutedBefore) { core.reset(); log("MUTE_LEAVE") }
+                            y = core.step(ring.copy(consumed-core.w48,core.w48,contextStart),settings)
+                        }
+                        mutedBefore = muted
+                        // 闭麦时 core 没跑过，它的 last* 全是上一块的旧值，一律不当真
+                        val skipped = !muted && core.lastSkippedQuiet
+                        val inPeak = if (muted) 0f else core.lastInPeak
+                        val outPeak = if (muted) 0f else core.lastRawPeak
+                        val prepMs = if (muted) 0.0 else core.lastPrepMs
+                        val postMs = if (muted) 0.0 else core.lastPostMs
                         val ms = (System.nanoTime()-start)/1e6
                         // A stalled inference must not replay an old block before jumping forward.
                         if (persistent && ring.total-consumed > core.b48*3) {
@@ -310,10 +352,10 @@ object VirtualMicSession {
                             log("STALE_OUTPUT_DISCARDED compute_ms=$ms drops=$drops")
                             continue
                         }
-                        meter = Meter(core.lastInPeak, core.lastRawPeak, ms, drops)
-                        VirtualMicSession.lastRms = core.lastInRms
-                        // 绿点只认「真的在说话」：游戏占着麦克风、只有环境声时不点亮。
-                        if (core.lastSpoke) VirtualMicSession.noteAudio()
+                        meter = Meter(inPeak, outPeak, ms, drops)
+                        VirtualMicSession.lastRms = if (muted) 0f else core.lastInRms
+                        // 绿点只认「真的在说话」：游戏占着麦克风、只有环境声时不点亮；闭麦时当然也不亮。
+                        if (!muted && core.lastSpoke) VirtualMicSession.noteAudio()
                         if (!running) break
                         // 本地音频（不变声）按块叠加进回注 PCM：和变声输出走同一条通路，游戏侧同时听到两路。
                         // 放在这里是因为静音停推时 step 也会返回一整块零，素材照样能送出去。
@@ -323,26 +365,28 @@ object VirtualMicSession {
                             val v = (y[i]*32768).roundToInt().coerceIn(-32768,32767)
                             pcm[2*i]=v.toByte(); pcm[2*i+1]=(v shr 8).toByte()
                         }
-                        val sourceStart=consumed-params.tail*480L+(if(core.lastSkippedQuiet) 0 else core.lastOffset)
+                        val sourceStart=consumed-params.tail*480L+(if(skipped || muted) 0 else core.lastOffset)
                         output.writeInt(y.size); output.writeLong(sourceStart); output.write(pcm); output.flush()
+                        VirtualMicSession.noteBlock()
                         processed?.append(y)
                         steps++; computeTotal+=ms; computeMax=max(computeMax,ms)
-                        if (core.lastSkippedQuiet) quietSteps++
-                        inputPeak=max(inputPeak,core.lastInPeak); outputPeak=max(outputPeak,core.lastRawPeak)
+                        if (skipped) quietSteps++
+                        if (muted) mutedSteps++
+                        inputPeak=max(inputPeak,inPeak); outputPeak=max(outputPeak,outPeak)
                         val backlog=(have-consumed)/48.0
                         val stage = engine.timing.indices.joinToString(",") { ((engine.timing[it]-before[it])*1000).toString() }
-                        csv.write("$steps,$ms,$backlog,${core.lastInPeak},${core.lastRawPeak},${core.clips},${core.lastSkippedQuiet},${core.lastPrepMs},$stage,${core.lastPostMs}\n")
+                        csv.write("$steps,$ms,$backlog,$inPeak,$outPeak,${core.clips},$skipped,$prepMs,$stage,$postMs\n")
                         val now=System.nanoTime()
                         if (now-lastReport>1_000_000_000L) {
                             status=String.format(Locale.US,str(R.string.ui_virtual_mic_converting_ms_block_processing_ms),model.name,block*10,ms,backlog,drops)
-                            log("STREAM steps=$steps compute_ms=$ms backlog_ms=$backlog in_peak=${core.lastInPeak} out_peak=${core.lastRawPeak} drops=$drops quiet_steps=$quietSteps audio=${AudioDeck.state} audio_peak=${AudioDeck.lastPeak} audio_over=${AudioDeck.clippedBlocks}")
+                            log("STREAM steps=$steps compute_ms=$ms backlog_ms=$backlog in_peak=$inPeak out_peak=$outPeak drops=$drops quiet_steps=$quietSteps muted=$muted muted_steps=$mutedSteps audio=${AudioDeck.state} audio_peak=${AudioDeck.lastPeak} audio_over=${AudioDeck.clippedBlocks} monitor=${AudioDeck.monitor}")
                             lastReport=now
                         }
                     }
                 }
             }
             captureFailure.get()?.let { throw it }
-            log("SUMMARY steps=$steps mean_ms=${computeTotal/max(1,steps)} max_ms=$computeMax drops=$drops input_peak=$inputPeak output_peak=$outputPeak clips=${core.clips} quiet_steps=$quietSteps bridge_eof=$normalEnd")
+            log("SUMMARY steps=$steps mean_ms=${computeTotal/max(1,steps)} max_ms=$computeMax drops=$drops input_peak=$inputPeak output_peak=$outputPeak clips=${core.clips} quiet_steps=$quietSteps muted_steps=$mutedSteps bridge_eof=$normalEnd")
             status=str(R.string.ui_virtual_mic_conversion_ended_processed_blocks_skips, steps, drops)
         } catch (e: Throwable) {
             if (running && e !is InterruptedException) {
