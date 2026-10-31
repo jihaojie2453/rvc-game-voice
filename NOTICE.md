@@ -17,7 +17,8 @@ The app reimplements RVC's inference pipeline around ONNX exports of those model
 
 ## Shared models on the Releases page (`common-v1`)
 
-The app downloads these from this repository's `common-v1` release; `converter/rvc2phone.py --common` builds the same
+The app downloads these from the upstream project's `common-v1` release (see `CommonModels.BASE`);
+`converter/rvc2phone.py --common` builds the same
 files from the original weights. They are converted, not retrained: exported to ONNX, and in
 `hubert.htp.onnx` each GELU (exported as an erf formula) is fused into one Gelu node for the Snapdragon NPU.
 
