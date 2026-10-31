@@ -1,20 +1,20 @@
-# Voice Studio (Android)
+# Timbre Forge (Android) · 音色工坊
 
 Maintained by [@jihaojie2453](https://github.com/jihaojie2453).
 
-Real-time voice conversion for mobile games, running entirely on the phone. Pick a game, a
+Real-time voice conversion for mobile games, running entirely on the phone. Pick a game, bind a
 voice and a profile, start the virtual microphone, and the game receives the converted voice
 instead of the physical microphone. The app then moves to the background and leaves a small
-red/green floating button on screen.
+capsule on screen; mute, material and playback are all driven from the overlay from then on.
 
 Built on the [RVC](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI) framework:
 the conversion engine and its model exports come from there, and are credited in `NOTICE.md`.
 Everything else — the app, the bridge integration and the features below — was written for this
 project, starting from 0.4.4:
 
-- **The Android app and its overlay.** Four screens (Record / Games / Status / General), per-game
-  voice binding, profiles, the live parameter set; the floating capsule and panel, the two-column
-  layout, the audio window.
+- **The Android app and its overlay.** Five screens (录音 / 配置 / 状态 / 音频 / 通用), per-game
+  voice binding, profiles, the live parameter set; the floating capsule, the two-column panel and
+  the audio window.
 - **闭麦 (mute).** One tap stops inference and mutes the model while the game keeps receiving
   silence — the microphone route stays alive, so no device switch and no re-negotiation.
 - **返音 (monitor).** The material being sent into the microphone is also played locally, with its
@@ -34,16 +34,17 @@ or file-conversion mode any more; both were removed in 0.6.0.
 
 ## What it does
 
-Four tabs:
+Five tabs:
 
 | Tab | Contents |
 | --- | --- |
-| **Record** | record, waveform, takes, playback, save — the original voice, no conversion |
-| **Games** | add a game, bind a voice + profile, create/rename/delete profiles, edit parameters |
-| **Status** | start/stop the virtual microphone, phase, timer, input/output levels, compute time |
-| **General** | voice models (import / download), compute device, CPU threads, app language |
+| **录音** Record | record, waveform, takes, playback, save — your own voice, no conversion |
+| **配置** Config | add a game, bind a voice + a profile, create / rename / delete profiles, edit parameters |
+| **状态** Status | start / stop the virtual microphone, phase, timer, input and output levels, compute time |
+| **音频** Audio | the material folder: pick a directory, grant access, browse the categories and audio files on the device, and send one into the microphone |
+| **通用** General | voice models (import / download), compute device, CPU threads, app language |
 
-## Overlay
+## The overlay
 
 While a session runs the app has no task in recents; only a capsule stays on top.
 
@@ -51,9 +52,26 @@ While a session runs the app has no task in recents; only a capsule stays on top
 - **Red** — "waiting for the microphone" (nothing is recording) or "connected · waiting for your
   voice" (the game holds the microphone but nobody is speaking).
 
-Tap the capsule for the panel: current game, voice, profile, five live parameters (output gain,
-input gain, high-pitch protection, formant, silence threshold), "restart session" and "quit".
-The restart button only lights up when a parameter that needs a new session has been changed.
+Tap the capsule for the panel. It is laid out in two columns:
+
+- **Left** — the game's voice and profile, then five live sliders: output gain, input gain,
+  high-pitch protection, formant, silence threshold.
+- **Right** — 重开会话 (restart session), 闭麦 (mute), 音频 (audio window) and 退出应用 (quit).
+  The restart button only lights up when a parameter that needs a new session has been changed.
+
+**闭麦** adds a second, round badge next to the capsule. The badge reports the session itself:
+green while inference is running, amber while it is still starting, red and slashed once the
+microphone is muted. Tapping it mutes and unmutes; the game keeps its route the whole time.
+
+**音频** opens a ♪ window with the material:
+
+- **本地** — audio files on the device. Picking one sends it into the microphone, unconverted.
+- **首页** — online songs from the Lx source scripts you supply, in three lists: 热门 / 喜欢 /
+  搜索. Every row carries a ♥; 喜欢 is that liked list, kept across restarts.
+- **播放模式** (in order / repeat one / shuffle) and **音质** (auto / highest / stable) cycle by
+  tapping. 音质 applies to the next song.
+- **返音** also plays the material on the phone, with its own volume. The × closes the window and
+  stops playback.
 
 ## How it works
 
@@ -113,12 +131,15 @@ with the debug key.
 - Snapdragon SoC for the NPU path. The virtual microphone is written around QNN HTP and has no
   tested CPU fallback.
 - About 1.1 GB for the shared models (HuBERT, its NPU export, RMVPE) plus the voice models.
-- `SYSTEM_ALERT_WINDOW` for the overlay.
+  They are downloaded from the upstream `common-v1` release; see `NOTICE.md`.
+- `SYSTEM_ALERT_WINDOW` for the overlay, and all-files access for the material folder.
+- Online music needs the Lx source scripts, which are not bundled — drop `.js` files into
+  `files/lx_sources/` (see `LxSources.USER_DIR`).
 
 ## Known limitations
 
 - The formant, the block size, the context, the crossfade, the output buffer and the model
-  settings are baked into the session shape: changing them needs "restart session".
+  settings are baked into the session shape: changing them needs 重开会话 (restart session).
 - Only one session at a time; the preview, the virtual microphone and a restart exclude each
   other.
 - A game that keeps its microphone open while you are not talking still makes the app convert;
@@ -126,6 +147,8 @@ with the debug key.
   surface picks up friction noise that can be louder than speech — put it on something hard.
 - Using the Bluetooth headset microphone switches the link from A2DP to SCO: game audio becomes
   narrowband and gains latency.
+- On the tablet speaker, 返音 is picked up by the microphone and comes back through the game as a
+  second, converted copy. Use headphones.
 - `README.ko.md` and `docs/*.ko.md` are outdated; the English files are authoritative.
 
 ## Credits
