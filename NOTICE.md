@@ -1,8 +1,10 @@
 # Notice
 
-The PC converter (`converter/rvc/`) contains model code from
-[RVC-Project/Retrieval-based-Voice-Conversion-WebUI](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI)
-(MIT, see `converter/rvc/LICENSE`). The app reimplements RVC's inference pipeline around ONNX exports of those models.
+Voice Studio (Android) builds on the RVC ecosystem. The upstream RVC code in `converter/rvc/` is MIT licensed —
+Copyright (c) 2023 liujing04, 源文雨 and Ftps — and that notice is kept verbatim in `converter/rvc/LICENSE`,
+as the MIT license requires. Upstream project:
+[RVC-Project/Retrieval-based-Voice-Conversion-WebUI](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI).
+The app reimplements RVC's inference pipeline around ONNX exports of those models.
 
 ## Used by the app, not stored here
 
