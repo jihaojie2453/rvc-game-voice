@@ -126,7 +126,10 @@ class MainActivity : Activity() {
         refreshRecordings()
         // 本地音频：每次打开 App 扫一次目录（使用过程中不刷新，产品决定）
         AudioDeck.setGain(prefs.getFloat("audio_gain_db", -12f))
-        AudioDeck.loop = prefs.getBoolean("audio_loop", false)
+        AudioDeck.setMode(
+            runCatching { AudioDeck.Mode.valueOf(prefs.getString("audio_mode", "LOOP_ONE")!!) }
+                .getOrDefault(AudioDeck.Mode.LOOP_ONE),
+        )
         AudioDeck.setMonitorGain(prefs.getFloat("audio_monitor_gain_db", -6f))
         AudioDeck.setMonitor(prefs.getBoolean("audio_monitor", false))
         // 调试：有 debug_hooks 时把解码结果落成 wav，方便在电脑上验频谱
@@ -1323,16 +1326,22 @@ class MainActivity : Activity() {
         }
         audioToggleButton = toggleButton
         control.addView(toggleButton)
-        control.addView(Switch(this).apply {
-            text = str(R.string.ui_audio_loop)
+        val modeButton = Button(this, null, 0, R.style.SoftButton).apply {
             textSize = 13f
-            isChecked = prefs.getBoolean("audio_loop", false)
-            setPadding(0, dp(8), 0, 0)
-            setOnCheckedChangeListener { _, checked ->
-                AudioDeck.loop = checked
-                prefs.edit().putBoolean("audio_loop", checked).apply()
+            setPadding(0, dp(8), 0, dp(8))
+            setOnClickListener {
+                val next = when (AudioDeck.mode) {
+                    AudioDeck.Mode.LOOP_ONE -> AudioDeck.Mode.SHUFFLE
+                    AudioDeck.Mode.SHUFFLE -> AudioDeck.Mode.SEQUENCE
+                    AudioDeck.Mode.SEQUENCE -> AudioDeck.Mode.LOOP_ONE
+                }
+                AudioDeck.setMode(next)
+                prefs.edit().putString("audio_mode", next.name).apply()
+                text = str(R.string.ui_audio_mode, str(modeNameRes(next)))
             }
-        })
+            text = str(R.string.ui_audio_mode, str(modeNameRes(AudioDeck.mode)))
+        }
+        control.addView(modeButton)
         val volumeValue = valueText()
         val volumeBar = sliderRow(control, str(R.string.ui_audio_volume), volumeValue, "-24", "+12", 36)
         volumeBar.progress = (AudioDeck.gainDb + 24f).roundToInt().coerceIn(0, 36)
@@ -1488,12 +1497,18 @@ class MainActivity : Activity() {
                         toast(str(R.string.ui_audio_need_session))
                         return@setOnClickListener
                     }
-                    AudioDeck.play(track)
+                    AudioDeck.playList(track, tracks)
                 }
             }
             host.addView(row, LinearLayout.LayoutParams(-1, -2))
             audioRows.add(track.id to row)
         }
+    }
+
+    private fun modeNameRes(m: AudioDeck.Mode): Int = when (m) {
+        AudioDeck.Mode.SEQUENCE -> R.string.ui_audio_mode_sequence
+        AudioDeck.Mode.LOOP_ONE -> R.string.ui_audio_mode_loop
+        AudioDeck.Mode.SHUFFLE -> R.string.ui_audio_mode_shuffle
     }
 
     private fun spinnerAdapter(items: List<String>): ArrayAdapter<String> {

@@ -86,9 +86,33 @@ class OverlayService : Service() {
     private var audioExpanded = false
     private var audioSyncing = false
     private var audioCategories: List<AudioLibrary.Category> = emptyList()
-    private val audioRows = ArrayList<Pair<String, TextView>>()
+    private val audioRows = ArrayList<Pair<String, View>>()
     private var audioHighlight: String? = null
     private var rowOn: GradientDrawable? = null
+
+    // ---- 「首页」：网络音乐（热门 / 最近 / 搜索）----
+    private var audioHomeBox: LinearLayout? = null
+    private var audioLocalBox: LinearLayout? = null
+    private var audioSearchRow: LinearLayout? = null
+    private var audioSearchInput: android.widget.EditText? = null
+    private var audioHomeNote: TextView? = null
+    private var audioModeHome: TextView? = null
+    private var audioModeLocal: TextView? = null
+    private var audioTabHot: TextView? = null
+    private var audioTabLiked: TextView? = null
+    private var audioTabSearch: TextView? = null
+    /** 当前面板在「首页」还是「本地」；首页三个页签：0 热门 1 最近 2 搜索。 */
+    private var homeMode = false
+    private var homeTab = 0
+    /** 当前显示的那一列。 */
+    private var homeSongs: List<LxMusic.Song> = emptyList()
+    /** 热门自己的缓存——必须和搜索结果分开，否则搜完再回热门会显示搜索结果。 */
+    private var hotSongs: List<LxMusic.Song> = emptyList()
+    private var searchSongs: List<LxMusic.Song> = emptyList()
+    private var homeBusy = false
+    private var lastHotTap = 0L
+    private var audioModeBtn: TextView? = null
+    private var audioQualityBtn: TextView? = null
 
     // ---- 闭麦专属悬浮窗（第三个窗口）----
     private var muteRoot: LinearLayout? = null
@@ -122,9 +146,23 @@ class OverlayService : Service() {
         // 音频那几个开关是持久化的；服务先起来时也要把它们放回 AudioDeck（setMonitor 是幂等的）
         AudioDeck.setMonitorGain(prefs.getFloat("audio_monitor_gain_db", -6f))
         AudioDeck.setMonitor(prefs.getBoolean("audio_monitor", false))
+        // 播放模式：老版本只有 audio_loop 布尔，读不到就用默认的单曲循环
+        AudioDeck.setMode(
+            runCatching { AudioDeck.Mode.valueOf(prefs.getString("audio_mode", "LOOP_ONE")!!) }
+                .getOrDefault(AudioDeck.Mode.LOOP_ONE),
+        )
         addOverlay()
         ui.post(tick)
         visible = true
+
+        // 网络音源：WebView 起得慢，服务一起来就预热，别等用户点开首页才开始加载 31 个脚本
+        LxMusic.init(this) { ok ->
+            ui.post {
+                audioHomeNote?.text =
+                    if (ok) str(R.string.ui_audio_sources_ok, LxMusic.scriptCount())
+                    else str(R.string.ui_audio_sources_failed)
+            }
+        }
     }
 
     override fun onDestroy() {
@@ -136,6 +174,7 @@ class OverlayService : Service() {
         audioRoot = null
         muteRoot?.let { runCatching { wm.removeView(it) } }
         muteRoot = null
+        LxMusic.release()
         super.onDestroy()
     }
 
@@ -198,10 +237,17 @@ class OverlayService : Service() {
         body.addView(title)
         gameView = game
 
-        body.addView(rowLabel(str(R.string.ui_overlay_voice)))
-        voiceSpinner = Spinner(this).also { body.addView(it) }
-        body.addView(rowLabel(str(R.string.ui_overlay_profile)))
-        profileSpinner = Spinner(this).also { body.addView(it) }
+        // 音色 / 方案 并排放一行：竖着堆会把面板拉太长，横屏装不下
+        val heads = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val voiceCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        voiceCol.addView(rowLabel(str(R.string.ui_overlay_voice)))
+        voiceSpinner = Spinner(this).also { voiceCol.addView(it) }
+        heads.addView(voiceCol, LinearLayout.LayoutParams(0, -2, 1f))
+        val profileCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        profileCol.addView(rowLabel(str(R.string.ui_overlay_profile)))
+        profileSpinner = Spinner(this).also { profileCol.addView(it) }
+        heads.addView(profileCol, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(10) })
+        body.addView(heads)
 
         switching = TextView(this).apply {
             textSize = 11f; setTextColor(Color.parseColor("#FFB020")); setPadding(0, dp(6), 0, 0)
@@ -209,58 +255,57 @@ class OverlayService : Service() {
         }
         body.addView(switching)
 
+        // 左栏滑杆、右栏按钮：面板加宽、纵向压到一半
+        val grid = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val left = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+
         // 五个常用参数
-        slider(body, str(R.string.ui_output_gain), -12.0, 24.0, 1.0, "live_gain_db") { v ->
+        slider(left, str(R.string.ui_output_gain), -12.0, 24.0, 1.0, "live_gain_db") { v ->
             setParam(VoiceProfiles.GROUP_ENGINE, "live_gain_db", v)
         }
-        slider(body, str(R.string.ui_input_gain), 0.0, 24.0, 1.0, "live_input_gain_db") { v ->
+        slider(left, str(R.string.ui_input_gain), 0.0, 24.0, 1.0, "live_input_gain_db") { v ->
             setParam(VoiceProfiles.GROUP_ENGINE, "live_input_gain_db", v)
         }
-        slider(body, str(R.string.ui_high_pitch_protection_strength), 1.0, 3.0, 0.1, "high_pitch_ratio") { v ->
+        slider(left, str(R.string.ui_high_pitch_protection_strength), 1.0, 3.0, 0.1, "high_pitch_ratio") { v ->
             setParam(VoiceProfiles.GROUP_VOICE, "high_pitch_ratio", v)
         }
-        slider(body, str(R.string.ui_formant_voice_texture), -2.0, 2.0, 0.1, "formant") { v ->
+        slider(left, str(R.string.ui_formant_voice_texture), -2.0, 2.0, 0.1, "formant") { v ->
             setParam(VoiceProfiles.GROUP_VOICE, "formant", v)
         }
-        slider(body, str(R.string.ui_silence_threshold), -80.0, -30.0, 1.0, "live_threshold_db") { v ->
+        slider(left, str(R.string.ui_silence_threshold), -80.0, -30.0, 1.0, "live_threshold_db") { v ->
             setParam(VoiceProfiles.GROUP_ENGINE, "live_threshold_db", v)
         }
 
-        // 四个按钮一行会挤到看不清字，改成 2×2
-        val actions = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) }
-        }
-        val row1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        grid.addView(left, LinearLayout.LayoutParams(0, -2, 1.5f))
+
+        // 四个按钮竖着码在右栏，不再占一整行的高度
+        val right = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val restart = Button(this, null, 0, R.style.SoftButton).apply {
             text = str(R.string.ui_overlay_restart); textSize = 12f
             setOnClickListener { restartSession() }
         }
         restartButton = restart
-        row1.addView(restart, LinearLayout.LayoutParams(0, dp(42), 1f))
+        right.addView(restart, LinearLayout.LayoutParams(-1, dp(42)))
         val mute = Button(this, null, 0, R.style.SoftButton).apply {
             text = str(R.string.ui_overlay_mute); textSize = 12f
             setOnClickListener { toggleMuteWindow() }
         }
-        row1.addView(mute, LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginStart = dp(8) })
-        actions.addView(row1)
-
-        val row2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        right.addView(mute, LinearLayout.LayoutParams(-1, dp(42)).apply { topMargin = dp(8) })
         val audio = Button(this, null, 0, R.style.SoftButton).apply {
             text = str(R.string.ui_audio); textSize = 12f
             setOnClickListener { showAudioOverlay() }
         }
-        row2.addView(audio, LinearLayout.LayoutParams(0, dp(42), 1f))
+        right.addView(audio, LinearLayout.LayoutParams(-1, dp(42)).apply { topMargin = dp(8) })
         val quit = Button(this, null, 0, R.style.SoftButton).apply {
             text = str(R.string.ui_overlay_quit); textSize = 12f
             setOnClickListener { quitEverything() }
         }
-        row2.addView(quit, LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginStart = dp(8) })
-        actions.addView(row2, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
-        body.addView(actions)
+        right.addView(quit, LinearLayout.LayoutParams(-1, dp(42)).apply { topMargin = dp(8) })
+        grid.addView(right, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(12) })
+        body.addView(grid)
         drag(title, { root })
 
-        column.addView(body, LinearLayout.LayoutParams(dp(268), -2).apply { topMargin = dp(8) })
+        column.addView(body, LinearLayout.LayoutParams(dp(420), -2).apply { topMargin = dp(8) })
         panel = body
         collapsed = head
         root = column
@@ -682,19 +727,32 @@ class OverlayService : Service() {
 
     // ---------------------------------------------------------------- 音频悬浮窗（第二个窗口）
 
-    /** 主面板上的「音频」按钮：第一次点建窗口，之后只是重新露出来。 */
+    /**
+     * 主面板上的「音频」按钮：没建过就建；已经在屏幕上就整体收掉（素材继续放）。
+     * 面板里的 × 只是把面板收回 ♪ 图标，不关功能。
+     */
+    /** 主面板上的「音频」按钮：第一次点建窗口，之后只是重新露出来（退出走面板里的 ×）。 */
     private fun showAudioOverlay() {
         if (audioRoot == null) createAudioWindow()
         audioRoot?.visibility = View.VISIBLE
         audioExpanded = true
         audioPanel?.visibility = View.VISIBLE
-        populateAudio()
+        refreshAudioPanel()
     }
 
+    /**
+     * × = **退出音频功能**：窗口收起，同时把本地素材和在线流都停掉。
+     * 用户要的就是「关掉就是不要了」，别留在后台偷偷放。
+     */
     private fun hideAudioOverlay() {
         audioExpanded = false
         audioPanel?.visibility = View.GONE
         audioRoot?.visibility = View.GONE
+        hideKeyboard()
+        setAudioFocusable(false)
+        runCatching { LxMusic.stopStream() }
+        AudioDeck.release()
+        audioHomeNote?.text = null
     }
 
     /** 一颗 ♪ 图标 + 面板：图标可拖、可点开，面板里选分类、点音频直接发。 */
@@ -737,13 +795,111 @@ class OverlayService : Service() {
         })
         body.addView(title)
 
-        body.addView(rowLabel(str(R.string.ui_audio_category)))
-        val spinner = Spinner(this)
-        body.addView(spinner)
+        // ---- 首页 / 本地 切换 ----
+        val modeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val btnHome = audioModeButton(str(R.string.ui_audio_home))
+        val btnLocal = audioModeButton(str(R.string.ui_audio_local))
+        modeRow.addView(btnHome, LinearLayout.LayoutParams(0, dp(30), 1f).apply { marginEnd = dp(6) })
+        modeRow.addView(btnLocal, LinearLayout.LayoutParams(0, dp(30), 1f))
+        body.addView(modeRow, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
 
+        // ---- 首页：热门 / 最近 / 搜索 ----
+        val homeBox = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+        }
+        val tabs = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val tabHot = audioModeButton(str(R.string.ui_audio_hot))
+        val tabLiked = audioModeButton(str(R.string.ui_audio_liked))
+        val tabSearch = audioModeButton(str(R.string.ui_audio_search))
+        tabs.addView(tabHot, LinearLayout.LayoutParams(0, dp(28), 1f).apply { marginEnd = dp(4) })
+        tabs.addView(tabLiked, LinearLayout.LayoutParams(0, dp(28), 1f).apply { marginEnd = dp(4) })
+        tabs.addView(tabSearch, LinearLayout.LayoutParams(0, dp(28), 1f))
+        homeBox.addView(tabs, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
+
+        val searchRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            visibility = View.GONE
+        }
+        val searchInput = android.widget.EditText(this).apply {
+            hint = str(R.string.ui_audio_search_hint)
+            textSize = 12f
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.parseColor("#70707A"))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(8).toFloat()
+                setColor(Color.parseColor("#26FFFFFF"))
+            }
+            setPadding(dp(8), dp(6), dp(8), dp(6))
+            maxLines = 1
+            inputType = android.text.InputType.TYPE_CLASS_TEXT
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
+            setOnEditorActionListener { _, actionId, _ ->
+                if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH) {
+                    runSearch()
+                    true
+                } else {
+                    false
+                }
+            }
+            // 打完字就把窗口还给系统：一直获焦会抢返回键
+            setOnFocusChangeListener { _, hasFocus -> if (!hasFocus) setAudioFocusable(false) }
+        }
+        val searchGo = TextView(this).apply {
+            text = str(R.string.ui_audio_search_action)
+            textSize = 12f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            setPadding(dp(12), dp(6), dp(12), dp(6))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(8).toFloat()
+                setColor(Color.parseColor("#8030A46C"))
+            }
+            setOnClickListener { runSearch() }
+        }
+        searchRow.addView(searchInput, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(6) })
+        searchRow.addView(searchGo, LinearLayout.LayoutParams(-2, -2))
+        homeBox.addView(searchRow, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
+
+        val homeNote = TextView(this).apply {
+            textSize = 10f
+            setTextColor(Color.parseColor("#9A9AA5"))
+            setPadding(0, dp(4), 0, 0)
+            maxLines = 2
+        }
+        homeBox.addView(homeNote)
+        body.addView(homeBox)
+
+        // ---- 本地：分类下拉 ----
+        val localBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        localBox.addView(rowLabel(str(R.string.ui_audio_category)))
+        val spinner = Spinner(this)
+        localBox.addView(spinner)
+        body.addView(localBox)
+
+        audioModeHome = btnHome
+        audioModeLocal = btnLocal
+        audioHomeBox = homeBox
+        audioLocalBox = localBox
+        audioSearchRow = searchRow
+        audioSearchInput = searchInput
+        audioHomeNote = homeNote
+        audioTabHot = tabHot
+        audioTabLiked = tabLiked
+        audioTabSearch = tabSearch
+        btnHome.setOnClickListener { setAudioMode(true) }
+        btnLocal.setOnClickListener { setAudioMode(false) }
+        tabHot.setOnClickListener { onHomeTab(0) }
+        tabLiked.setOnClickListener { onHomeTab(1) }
+        tabSearch.setOnClickListener { onHomeTab(2) }
+        renderModeButton()
+
+        // 左栏曲目列表、右栏播放控制：加宽压短，别把按钮顶到屏幕外
+        val grid = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val left = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val scroll = ScrollView(this).apply { addView(list) }
-        body.addView(scroll, LinearLayout.LayoutParams(-1, dp(168)).apply { topMargin = dp(6) })
+        left.addView(scroll, LinearLayout.LayoutParams(-1, dp(238)).apply { topMargin = dp(6) })
 
         val status = TextView(this).apply {
             textSize = 11f
@@ -752,22 +908,41 @@ class OverlayService : Service() {
             maxLines = 2
             ellipsize = TextUtils.TruncateAt.END
         }
-        body.addView(status)
+        left.addView(status)
+        grid.addView(left, LinearLayout.LayoutParams(0, -2, 1.45f))
 
-        body.addView(Switch(this).apply {
-            text = str(R.string.ui_audio_loop)
+        val right = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val toggle = Button(this, null, 0, R.style.SoftButton).apply {
+            text = str(R.string.ui_audio_stop)
             textSize = 12f
-            setTextColor(Color.WHITE)
-            isChecked = AudioDeck.loop
-            setPadding(0, dp(6), 0, 0)
-            setOnCheckedChangeListener { _, checked ->
-                AudioDeck.loop = checked
-                prefs.edit().putBoolean("audio_loop", checked).apply()
-            }
-        })
+            isEnabled = false
+            alpha = 0.38f
+            setOnClickListener { AudioDeck.toggle() }
+        }
+        right.addView(toggle, LinearLayout.LayoutParams(-1, dp(42)).apply { topMargin = dp(6) })
+
+        // 播放模式：顺序 / 循环 / 随机 三态，点一下换一个
+        val modeBtn = TextView(this).apply {
+            textSize = 12f
+            setTextColor(Color.parseColor("#C9C9D1"))
+            setPadding(0, dp(8), 0, dp(6))
+            setOnClickListener { cyclePlayMode() }
+        }
+        audioModeBtn = modeBtn
+        right.addView(modeBtn)
+
+        // 音质：自动 / 最高 / 稳定，点一下换一档（在线音源解析时按这个挑码率）
+        val qualityBtn = TextView(this).apply {
+            textSize = 12f
+            setTextColor(Color.parseColor("#C9C9D1"))
+            setPadding(0, 0, 0, dp(6))
+            setOnClickListener { cycleQuality() }
+        }
+        audioQualityBtn = qualityBtn
+        right.addView(qualityBtn)
 
         // 返音：素材除了送进麦克风，也从本机出声
-        body.addView(Switch(this).apply {
+        right.addView(Switch(this).apply {
             text = str(R.string.ui_audio_monitor)
             textSize = 12f
             setTextColor(Color.WHITE)
@@ -788,28 +963,26 @@ class OverlayService : Service() {
             visibility = View.GONE
         }
         monitorHint = hint
-        body.addView(hint)
+        right.addView(hint)
 
-        audioVolume(body)
-        monitorVolume(body)
-
-        val toggle = Button(this, null, 0, R.style.SoftButton).apply {
-            text = str(R.string.ui_audio_stop)
-            textSize = 12f
-            isEnabled = false
-            alpha = 0.38f
-            setOnClickListener { AudioDeck.toggle() }
-        }
-        body.addView(toggle, LinearLayout.LayoutParams(-1, dp(42)).apply { topMargin = dp(8) })
+        audioVolume(right)
+        monitorVolume(right)
+        grid.addView(right, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(12) })
+        body.addView(grid)
 
         drag(title, { audioRoot })
         drag(icon, { audioRoot }) {
             audioExpanded = !audioExpanded
             audioPanel?.visibility = if (audioExpanded) View.VISIBLE else View.GONE
-            if (audioExpanded) populateAudio()
+            if (audioExpanded) {
+                refreshAudioPanel()
+            } else {
+                hideKeyboard()
+                setAudioFocusable(false)
+            }
         }
 
-        column.addView(body, LinearLayout.LayoutParams(dp(268), -2).apply { topMargin = dp(8) })
+        column.addView(body, LinearLayout.LayoutParams(dp(480), -2).apply { topMargin = dp(8) })
 
         audioIcon = icon
         audioPanel = body
@@ -823,7 +996,10 @@ class OverlayService : Service() {
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            // FLAG_NOT_TOUCH_MODAL 必须显式写上：打字时要临时去掉 NOT_FOCUSABLE，
+            // 少了它窗口立刻变成"模态"，整块屏幕的触摸全被它吃掉（2026-10-31 用户报的）。
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             android.graphics.PixelFormat.TRANSLUCENT,
         ).apply {
@@ -903,7 +1079,7 @@ class OverlayService : Service() {
                         Toast.makeText(this@OverlayService, str(R.string.ui_audio_need_session), Toast.LENGTH_SHORT).show()
                         return@setOnClickListener
                     }
-                    AudioDeck.play(track)
+                    AudioDeck.playList(track, tracks)
                 }
             }
             list.addView(row, LinearLayout.LayoutParams(-1, -2))
@@ -941,7 +1117,9 @@ class OverlayService : Service() {
             state == AudioDeck.State.PAUSED -> str(R.string.ui_audio_paused, name)
             else -> ""
         }
-        val want = if (state == AudioDeck.State.IDLE) null else AudioDeck.track?.id
+        // 首页的行按「歌名 - 歌手」高亮（网络曲目没有本地文件 id）；本地按 file id
+        val want = if (state == AudioDeck.State.IDLE) null
+        else if (homeMode) AudioDeck.track?.name else AudioDeck.track?.id
         if (want != audioHighlight) {
             audioHighlight = want
             val on = rowOn ?: GradientDrawable().apply {
@@ -1034,6 +1212,290 @@ class OverlayService : Service() {
         if (prefs.getBoolean(MonitorRoute.WARNED, false)) return
         prefs.edit().putBoolean(MonitorRoute.WARNED, true).apply()
         Toast.makeText(this, str(R.string.ui_audio_monitor_speaker), Toast.LENGTH_LONG).show()
+    }
+
+    /* ---------------------------------------------------------------- 首页（网络音乐） */
+
+    private fun audioModeButton(text: String): TextView = TextView(this).apply {
+        this.text = text
+        textSize = 12f
+        setTextColor(Color.parseColor("#C9C9D1"))
+        gravity = Gravity.CENTER
+        background = GradientDrawable().apply {
+            cornerRadius = dp(8).toFloat()
+            setColor(Color.parseColor("#26FFFFFF"))
+        }
+    }
+
+    private fun paintMode() {
+        val on = GradientDrawable().apply {
+            cornerRadius = dp(8).toFloat()
+            setColor(Color.parseColor("#8030A46C"))
+        }
+        val off = GradientDrawable().apply {
+            cornerRadius = dp(8).toFloat()
+            setColor(Color.parseColor("#26FFFFFF"))
+        }
+        audioModeHome?.background = if (homeMode) on else off
+        audioLocalBox?.visibility = if (homeMode) View.GONE else View.VISIBLE
+        audioHomeBox?.visibility = if (homeMode) View.VISIBLE else View.GONE
+        val list = listOf(audioTabHot, audioTabLiked, audioTabSearch)
+        for ((i, t) in list.withIndex()) {
+            t?.background = if (i == homeTab) on else off
+            t?.setTextColor(if (i == homeTab) Color.WHITE else Color.parseColor("#C9C9D1"))
+        }
+    }
+
+    private fun refreshAudioPanel() {
+        paintMode()
+        // 这两行原来只在构造时调过一次（那时按钮还没创建），所以打开面板时按钮是空文本
+        renderModeButton()
+        renderQualityButton()
+        // 音源数量在 init 回调里就绪，但那时面板可能还没建，这里补一次
+        if (audioHomeNote?.text.isNullOrBlank()) {
+            audioHomeNote?.text =
+                if (LxMusic.isReady) str(R.string.ui_audio_sources_ok, LxMusic.scriptCount())
+                else str(R.string.ui_audio_sources_failed)
+        }
+        if (homeMode) loadHome() else populateAudio()
+    }
+
+    private fun setAudioMode(home: Boolean) {
+        if (homeMode == home) { refreshAudioPanel(); return }
+        homeMode = home
+        if (!home) {
+            // 离开搜索页/首页时把焦点还给游戏
+            hideKeyboard()
+            setAudioFocusable(false)
+        }
+        refreshAudioPanel()
+    }
+
+    /** 点页签：热门连点两次 = 刷新。 */
+    private fun onHomeTab(tab: Int) {
+        val now = android.os.SystemClock.elapsedRealtime()
+        val refresh = tab == 0 && homeTab == 0 && now - lastHotTap < 400
+        lastHotTap = if (tab == 0) now else 0L
+        setHomeTab(tab, refresh)
+    }
+
+    private fun setHomeTab(tab: Int, forceRefresh: Boolean = false) {
+        homeTab = tab
+        audioSearchRow?.visibility = if (tab == 2) View.VISIBLE else View.GONE
+        paintMode()
+        if (tab == 2) {
+            // 只有打字这一幕需要键盘：临时去掉 FLAG_NOT_FOCUSABLE，
+            // 否则系统不会把软键盘接到悬浮窗上（原来「打不了字」就是这个原因）。
+            setAudioFocusable(true)
+            audioSearchInput?.post { showKeyboard(audioSearchInput) }
+        } else {
+            hideKeyboard()
+            setAudioFocusable(false)
+            loadHome(forceRefresh)
+        }
+    }
+
+    private fun loadHome(forceRefresh: Boolean = false) {
+        val list = audioList ?: return
+        if (!LxMusic.isReady) {
+            list.removeAllViews()
+            list.addView(hintRow(str(R.string.ui_audio_sources_failed)))
+            return
+        }
+        when (homeTab) {
+            1 -> {
+                homeSongs = LxMusic.liked()
+                fillHomeList(homeSongs, str(R.string.ui_audio_liked_empty))
+            }
+            2 -> {
+                // 搜索页：显示上一次的搜索结果，等用户再点「搜」
+                if (searchSongs.isNotEmpty()) {
+                    homeSongs = searchSongs
+                    fillHomeList(searchSongs, str(R.string.ui_audio_search_empty))
+                } else {
+                    list.removeAllViews()
+                    list.addView(hintRow(str(R.string.ui_audio_search_hint)))
+                }
+            }
+            else -> {
+                if (forceRefresh) hotSongs = emptyList()
+                if (hotSongs.isNotEmpty() && !homeBusy) {
+                    homeSongs = hotSongs
+                    fillHomeList(hotSongs, null)
+                    return
+                }
+                if (homeBusy) return
+                homeBusy = true
+                list.removeAllViews()
+                list.addView(hintRow(str(R.string.ui_audio_hot_loading)))
+                LxMusic.hot(forceRefresh) { songs ->
+                    homeBusy = false
+                    hotSongs = songs
+                    ui.post {
+                        if (homeTab == 0) {
+                            homeSongs = songs
+                            fillHomeList(songs, str(R.string.ui_audio_search_empty))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun modeNameRes(m: AudioDeck.Mode): Int = when (m) {
+        AudioDeck.Mode.SEQUENCE -> R.string.ui_audio_mode_sequence
+        AudioDeck.Mode.LOOP_ONE -> R.string.ui_audio_mode_loop
+        AudioDeck.Mode.SHUFFLE -> R.string.ui_audio_mode_shuffle
+    }
+
+    private fun renderModeButton() {
+        audioModeBtn?.text = str(R.string.ui_audio_mode, str(modeNameRes(AudioDeck.mode)))
+    }
+
+    /** 顺序 → 循环 → 随机 → 顺序。 */
+    private fun cyclePlayMode() {
+        val next = when (AudioDeck.mode) {
+            AudioDeck.Mode.LOOP_ONE -> AudioDeck.Mode.SHUFFLE
+            AudioDeck.Mode.SHUFFLE -> AudioDeck.Mode.SEQUENCE
+            AudioDeck.Mode.SEQUENCE -> AudioDeck.Mode.LOOP_ONE
+        }
+        AudioDeck.setMode(next)
+        prefs.edit().putString("audio_mode", next.name).apply()
+        renderModeButton()
+    }
+
+    /** 音质三档：自动 → 最高 → 稳定 → 自动。下一首解析时生效。 */
+    private fun cycleQuality() {
+        val next = when (LxMusic.qualityMode) {
+            LxMusic.QualityMode.AUTO -> LxMusic.QualityMode.HIGHEST
+            LxMusic.QualityMode.HIGHEST -> LxMusic.QualityMode.STABLE
+            LxMusic.QualityMode.STABLE -> LxMusic.QualityMode.AUTO
+        }
+        LxMusic.setQualityMode(next)
+        renderQualityButton()
+    }
+
+    private fun renderQualityButton() {
+        audioQualityBtn?.text = str(R.string.ui_audio_quality, str(qualityNameRes(LxMusic.qualityMode)))
+    }
+
+    private fun qualityNameRes(q: LxMusic.QualityMode): Int = when (q) {
+        LxMusic.QualityMode.AUTO -> R.string.ui_audio_quality_auto
+        LxMusic.QualityMode.HIGHEST -> R.string.ui_audio_quality_highest
+        LxMusic.QualityMode.STABLE -> R.string.ui_audio_quality_stable
+    }
+
+    private fun runSearch() {
+        val kw = audioSearchInput?.text?.toString()?.trim().orEmpty()
+        val list = audioList ?: return
+        if (kw.isEmpty()) return
+        if (!LxMusic.isReady) {
+            list.removeAllViews()
+            list.addView(hintRow(str(R.string.ui_audio_sources_failed)))
+            return
+        }
+        list.removeAllViews()
+        list.addView(hintRow(str(R.string.ui_audio_searching)))
+        hideKeyboard()
+        LxMusic.search(kw) { songs ->
+            searchSongs = songs
+            ui.post {
+                if (homeTab == 2) {
+                    homeSongs = songs
+                    fillHomeList(songs, str(R.string.ui_audio_search_empty))
+                }
+            }
+        }
+    }
+
+    private fun fillHomeList(songs: List<LxMusic.Song>, empty: String?) {
+        val list = audioList ?: return
+        audioRows.clear()
+        audioHighlight = null
+        list.removeAllViews()
+        if (songs.isEmpty()) {
+            list.addView(hintRow(empty ?: str(R.string.ui_audio_none)))
+            return
+        }
+        for ((i, song) in songs.withIndex()) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            val title = TextView(this).apply {
+                text = song.display
+                textSize = 12f
+                setTextColor(Color.WHITE)
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+                setPadding(dp(10), dp(9), dp(10), dp(9))
+                setOnClickListener {
+                    if (!VirtualMicSession.isActive) {
+                        Toast.makeText(
+                            this@OverlayService,
+                            str(R.string.ui_audio_need_session),
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                        return@setOnClickListener
+                    }
+                    audioHomeNote?.text = str(R.string.ui_audio_resolving)
+                    // 搜索页：播完就停，不循环也不随机
+                    val oneShot = homeTab == 2
+                    LxMusic.play(song, songs, i, oneShot) { msg ->
+                        ui.post { audioHomeNote?.text = msg }
+                    }
+                }
+            }
+            row.addView(title, LinearLayout.LayoutParams(0, -2, 1f))
+
+            // 爱心：点亮就加进「喜欢」，再点取消
+            val heart = TextView(this).apply {
+                textSize = 15f
+                gravity = Gravity.CENTER
+                setPadding(dp(8), dp(6), dp(12), dp(6))
+            }
+            heart.setOnClickListener {
+                val on = LxMusic.toggleLike(song)
+                paintHeart(heart, on)
+                // 在「喜欢」页上取消点亮，直接把这行移出列表
+                if (homeTab == 1 && !on) loadHome()
+            }
+            paintHeart(heart, LxMusic.isLiked(song))
+            row.addView(heart, LinearLayout.LayoutParams(-2, -2))
+
+            list.addView(row, LinearLayout.LayoutParams(-1, -2))
+            audioRows.add(song.display to row)
+        }
+    }
+
+    /** 点亮 = 红色实心 ♥；未点亮 = 灰色空心 ♡。 */
+    private fun paintHeart(v: TextView, on: Boolean) {
+        v.text = if (on) "♥" else "♡"
+        v.setTextColor(if (on) Color.parseColor("#E5484D") else Color.parseColor("#70707A"))
+    }
+
+    /** 悬浮窗默认 FLAG_NOT_FOCUSABLE，系统不会接软键盘；打字时才临时允许获焦。 */
+    private fun setAudioFocusable(on: Boolean) {
+        val root = audioRoot ?: return
+        val lp = root.layoutParams as? WindowManager.LayoutParams ?: return
+        val flag = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+        val want = if (on) lp.flags and flag.inv() else lp.flags or flag
+        if (want == lp.flags) return
+        lp.flags = want
+        runCatching { wm.updateViewLayout(root, lp) }
+    }
+
+    private fun showKeyboard(v: View?) {
+        if (v == null) return
+        v.requestFocus()
+        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
+        imm?.showSoftInput(v, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+    }
+
+    private fun hideKeyboard() {
+        val v = audioSearchInput ?: return
+        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
+        imm?.hideSoftInputFromWindow(v.windowToken, 0)
     }
 
     private fun clock(ms: Long): String =

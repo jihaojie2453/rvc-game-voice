@@ -23,3 +23,8 @@ __pycache__/
 *.wav
 *.jks
 keys/
+
+# 音乐源脚本不进仓库：都是第三方脚本，各自去找。
+# 本地放着可以让 built-in 那条路径继续工作；装到设备上也可以把 .js 丢进
+# /data/data/com.voicestudio.phone/files/lx_sources/（LxSources.USER_DIR）由 App 自己加载。
+android/app/src/main/assets/lx/

@@ -122,6 +122,8 @@ object VirtualMicSession {
         silentHold = false
         // 会话一停就没有注入点了，本地音频的播放状态必须跟着清掉
         AudioDeck.release()
+        // 边下边播的流也要掐掉，否则它会一直下完
+        LxMusic.stopStream()
         runCatching { socket?.close() }
         wake.release()
     }
