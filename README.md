@@ -128,6 +128,13 @@ with the debug key.
   narrowband and gains latency.
 - `README.ko.md` and `docs/*.ko.md` are outdated; the English files are authoritative.
 
+## Credits
+
+Developed with [DeepSeek](https://github.com/deepseek) as the coding agent. The overlay system
+(capsule, panel, mute badge, audio window), the audio deck, 闭麦 / 返音, local material playback and
+the online-music integration were written with it, and most commit messages here come from it too.
+The conversion engine and the model exports are RVC's — see [NOTICE.md](NOTICE.md).
+
 ## License
 
 MIT, see [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md).
