@@ -1,12 +1,31 @@
 # Voice Studio (Android)
 
+Maintained by [@jihaojie2453](https://github.com/jihaojie2453).
+
 Real-time voice conversion for mobile games, running entirely on the phone. Pick a game, a
 voice and a profile, start the virtual microphone, and the game receives the converted voice
 instead of the physical microphone. The app then moves to the background and leaves a small
 red/green floating button on screen.
 
-Based on [RVC](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI). Models,
-recordings and converted audio never leave the device.
+Built on the [RVC](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI) framework:
+the conversion engine and its model exports come from there, and are credited in `NOTICE.md`.
+Everything else — the app, the bridge integration and the features below — was written for this
+project, starting from 0.4.4:
+
+- **The Android app and its overlay.** Four screens (Record / Games / Status / General), per-game
+  voice binding, profiles, the live parameter set; the floating capsule and panel, the two-column
+  layout, the audio window.
+- **闭麦 (mute).** One tap stops inference and mutes the model while the game keeps receiving
+  silence — the microphone route stays alive, so no device switch and no re-negotiation.
+- **返音 (monitor).** The material being sent into the microphone is also played locally, with its
+  own volume; it keeps running on its own clock while the game is not recording.
+- **Local material and online music.** Audio files from the device are mixed into the virtual
+  microphone (no conversion), and online songs — through user-supplied Lx source scripts — share
+  the same injection path: hot / liked / search lists, likes, play mode and quality.
+- **The audio deck.** Block scheduling, mixing, monitor clock and streaming playback, all in
+  `AudioDeck`.
+
+Models, recordings and converted audio never leave the device.
 
 **Root is required** (KernelSU / SukiSU). The bridge process runs as the `shell` user so it can
 hold `MODIFY_AUDIO_ROUTING` and register an `AudioPolicy` mix that replaces the target app's
