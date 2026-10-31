@@ -119,8 +119,17 @@ object AudioLibrary {
     }
 }
 
-/** 48 kHz 单声道 PCM，长度可能小于 [data] 的容量（省掉最后一次拷贝）。 */
-class Pcm(val data: ShortArray, val size: Int)
+/**
+ * 48 kHz 单声道 PCM，长度可能小于 [data] 的容量（省掉最后一次拷贝）。
+ *
+ * 本地文件是「一次填满、[ended] 恒为 true」；边下边播时 [data]/[size] 会在播放过程中增长，
+ * 由解码线程在 `synchronized(this)` 里发布，播放线程用同样的锁取快照，
+ * 这样读到的数组和长度一定是一对自洽的值。
+ */
+class Pcm(@Volatile var data: ShortArray, @Volatile var size: Int) {
+    /** 数据是否已经全部到齐。false = 还在边下边解，播到末尾要等而不是结束。 */
+    @Volatile var ended = true
+}
 
 internal class ShortSink {
     private var data = ShortArray(1 shl 16)
@@ -392,13 +401,26 @@ object AudioDeck {
     private const val GAP_SAMPLES = RATE * GAP_MS / 1000
 
     enum class State { IDLE, LOADING, PLAYING, PAUSED }
+
+    /** 播完一首之后怎么办。默认单曲循环（沿用 0.6.5 的语义）。 */
+    enum class Mode { SEQUENCE, LOOP_ONE, SHUFFLE }
     enum class Failure { NONE, NO_SESSION, DECODE }
 
     @Volatile var state = State.IDLE
         private set
     @Volatile var track: AudioLibrary.Track? = null
         private set
-    @Volatile var loop = false
+    @Volatile var mode = Mode.LOOP_ONE
+        private set
+
+    /** 兼容旧代码和旧偏好：true 等价于单曲循环。 */
+    var loop: Boolean
+        get() = mode == Mode.LOOP_ONE
+        set(v) { mode = if (v) Mode.LOOP_ONE else Mode.SEQUENCE }
+
+    fun setMode(m: Mode) {
+        mode = m
+    }
     @Volatile var failure = Failure.NONE
         private set
     @Volatile var failureDetail: String? = null
@@ -426,6 +448,25 @@ object AudioDeck {
     @Volatile private var monitorPos = -1
     /** 返音时钟还剩下的循环间隔采样数。 */
     @Volatile private var monitorGap = 0
+
+    /* ---------------------------------------------------------------- 自动接下一首 */
+
+    /**
+     * 本地队列：点某一首时把它所在的列表一起带进来，播完（且没开单曲循环）自动接下一首。
+     * 网络曲目不在本地，用 [onEnded] 把「放什么」交回调用方。
+     */
+    @Volatile private var queue: List<AudioLibrary.Track> = emptyList()
+    @Volatile private var queueIndex = -1
+
+    /** 没有本地队列时（网络曲目）由调用方决定下一首；null = 播完就停。 */
+    @Volatile var onEnded: (() -> Unit)? = null
+
+    /** 一次性播放：播完就停，不循环也不随机（搜索结果用）。 */
+    @Volatile private var oneShot = false
+
+    /** 每次新的播放/停止都自增，让等待中的「接下一首」失效，避免停了之后又自己响。 */
+    private val endedToken = java.util.concurrent.atomic.AtomicInteger(0)
+    private val endedHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     /** 最近一块「变声 + 素材」相加后的峰值（削顶前）和已经削顶过的块数，进会话日志查问题用。 */
     @Volatile var lastPeak = 0f
@@ -503,16 +544,29 @@ object AudioDeck {
                     monitorGap -= n
                     continue
                 }
-                if (monitorPos >= clip.size) {
-                    if (loop) { monitorPos = 0; monitorGap = GAP_SAMPLES; continue }
+                val clipData: ShortArray
+                val clipSize: Int
+                val clipEnded: Boolean
+                synchronized(clip) {
+                    clipData = clip.data
+                    clipSize = clip.size
+                    clipEnded = clip.ended
+                }
+                if (monitorPos >= clipSize) {
+                    if (mode == Mode.LOOP_ONE && !oneShot && clipEnded) { monitorPos = 0; monitorGap = GAP_SAMPLES; continue }
+                    if (!clipEnded) {
+                        // 边下边播：数据还没到，先往轨道里写静音把时钟续着，不要判定播完
+                        for (k in 0 until chunk) buf[k] = 0f
+                        t.write(buf, 0, chunk, AudioTrack.WRITE_BLOCKING)
+                        continue
+                    }
                     monitorEnded()
                     continue
                 }
                 val at = monitorPos
-                val n = min(chunk, clip.size - at)
+                val n = min(chunk, clipSize - at)
                 val g = 10.0.pow(monitorGainDb / 20.0).toFloat() / 32768f
-                val data = clip.data
-                for (k in 0 until n) buf[k] = data[at + k] * g
+                for (k in 0 until n) buf[k] = clipData[at + k] * g
                 t.write(buf, 0, n, AudioTrack.WRITE_BLOCKING)
                 monitorPos = at + n
                 position = monitorPos      // 界面进度跟着监听时钟走
@@ -554,11 +608,92 @@ object AudioDeck {
         gapLeft = 0
         monitorPos = -1
         android.util.Log.i("AudioDeck", "ended (monitor) track=${track?.name}")
+        notifyEnded()
+    }
+
+    /**
+     * 从某个列表里点一首：播完自动接列表里的下一首（单曲循环开着时不接）。
+     * 到列表末尾就停，不回头。
+     */
+    fun playList(t: AudioLibrary.Track, list: List<AudioLibrary.Track>) {
+        queue = list
+        queueIndex = list.indexOfFirst { it.id == t.id }
+        onEnded = null              // 本地队列优先，别让上一首网络曲的回调串进来
+        oneShot = false
+        play(t)
+    }
+
+    /**
+     * 网络曲目：音频文件已经落到缓存里，但「下一首」得现取现下，所以决定权交回调用方。
+     * [next] 为 null 时播完就停。
+     */
+    fun playRemote(t: AudioLibrary.Track, next: (() -> Unit)?, oneShot: Boolean = false) {
+        queue = emptyList()
+        queueIndex = -1
+        onEnded = next
+        this.oneShot = oneShot
+        play(t)
+    }
+
+    /**
+     * 一首放完（且没开单曲循环）后延迟 [GAP_MS] 再决定下一步：
+     * 优先接本地队列的下一首，否则交给 [onEnded]。
+     * 这期间用户又点了别的歌/停了，token 不匹配就作废，免得停了之后自己又响。
+     */
+    private fun notifyEnded() {
+        val token = endedToken.incrementAndGet()
+        val myId = track?.id
+        endedHandler.postDelayed({
+            val stillValid = endedToken.get() == token && state == State.IDLE && track?.id == myId
+            if (stillValid) {
+                if (oneShot) {
+                    onEnded?.invoke()
+                } else {
+                    val q = queue
+                    val i = queueIndex
+                    val next: AudioLibrary.Track? = when {
+                        i < 0 || q.isEmpty() -> null
+                        mode == Mode.SHUFFLE -> {
+                            var n = q.indices.random()
+                            if (q.size > 1 && n == i) n = (n + 1) % q.size
+                            q[n]
+                        }
+                        else -> q.getOrNull(i + 1)
+                    }
+                    if (next != null) playList(next, q) else onEnded?.invoke()
+                }
+            }
+        }, GAP_MS.toLong())
+    }
+
+    /**
+     * 边下边播：数据由 [LxStreamer] 往同一个 [Pcm] 里追加。
+     * 音乐状态机、返音、注入、循环、自动接歌全部照旧——只是数据源会变长。
+     */
+    @Synchronized
+    fun playStream(src: Pcm, label: String, next: (() -> Unit)?, oneShot: Boolean = false) {
+        generation++
+        endedToken.incrementAndGet()
+        queue = emptyList()
+        queueIndex = -1
+        onEnded = next
+        this.oneShot = oneShot
+        track = AudioLibrary.Track(label, java.io.File("stream", label.hashCode().toString()))
+        pcm = src
+        position = 0
+        gapLeft = 0
+        monitorPos = -1
+        monitorGap = 0
+        failure = Failure.NONE
+        failureDetail = null
+        state = State.PLAYING
+        android.util.Log.i("AudioDeck", "stream play=$label")
     }
 
     /** 点一次发送一次：同一首正在发就忽略；换了就立刻打断重来。 */
     @Synchronized
     fun play(t: AudioLibrary.Track) {
+        endedToken.incrementAndGet()
         val same = track?.id == t.id
         if (same && state == State.PLAYING) return
         if (same && pcm != null) {
@@ -636,6 +771,10 @@ object AudioDeck {
     @Synchronized
     fun release() {
         generation++
+        endedToken.incrementAndGet()
+        queue = emptyList()
+        queueIndex = -1
+        onEnded = null
         state = State.IDLE
         track = null
         pcm = null
@@ -663,7 +802,15 @@ object AudioDeck {
         var next = State.PLAYING
         var peak = 0f
         var over = false
-        val data = clip.data
+        // 边下边播时 size 会增长：数组和长度必须成对取，否则可能读到比 size 短的数组
+        val data: ShortArray
+        val clipSize: Int
+        val clipEnded: Boolean
+        synchronized(clip) {
+            data = clip.data
+            clipSize = clip.size
+            clipEnded = clip.ended
+        }
         // 素材是 16 bit 短整型（±32768），必须归一化到 [-1,1] 再乘增益；
         // 漏掉 /32768 会让音乐以 3 万倍的幅度进混音，整段被软限幅压成方波（听起来就是"炸"）。
         val g = gain / 32768f
@@ -674,19 +821,24 @@ object AudioDeck {
                 gap -= n
                 continue
             }
-            if (p >= clip.size) {
-                if (loop) {
+            if (p >= clipSize) {
+                // 单曲循环只在数据到齐后才绕回去，否则会把「刚开始下的那点」无限循环
+                if (mode == Mode.LOOP_ONE && !oneShot && clipEnded) {
                     p = 0
                     gap = GAP_SAMPLES
                     android.util.Log.i("AudioDeck", "loop-gap ${GAP_MS}ms track=${track?.name}")
                     continue
+                }
+                if (!clipEnded) {
+                    // 还没下完：本块剩下的保持变声输出，游标停在原地等下一块
+                    break
                 }
                 next = State.IDLE
                 p = 0
                 android.util.Log.i("AudioDeck", "ended track=${track?.name}")
                 break
             }
-            val n = min(clip.size - p, y.size - i)
+            val n = min(clipSize - p, y.size - i)
             for (k in 0 until n) {
                 val sum = y[i + k] + data[p + k] * g
                 val a = if (sum < 0) -sum else sum
@@ -706,6 +858,7 @@ object AudioDeck {
             state = next
             position = 0
             gapLeft = 0
+            if (next == State.IDLE) notifyEnded()
         }
     }
 
@@ -717,8 +870,13 @@ object AudioDeck {
         val at = monitorPos
         if (at < 0 || monitorGap > 0) return
         val g = gain / 32768f
-        val data = clip.data
-        val n = min(y.size, clip.size - at).coerceAtLeast(0)
+        val data: ShortArray
+        val clipSize: Int
+        synchronized(clip) {
+            data = clip.data
+            clipSize = clip.size
+        }
+        val n = min(y.size, clipSize - at).coerceAtLeast(0)
         var peak = 0f
         var over = false
         for (k in 0 until n) {
