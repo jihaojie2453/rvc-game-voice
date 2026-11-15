@@ -39,6 +39,9 @@ object RootMicController {
     @Volatile private var rootLogFile: File? = null
     @Volatile private var rootCheckedAt = 0L
     @Volatile private var rootOk = false
+    /** 只为「只重启转换器」用：桥接要活过这次重启，所以监控循环不能在会话停止时退出。 */
+    @Volatile private var restartingConverter = false
+    @Volatile private var appContext: Context? = null
 
     val phase: MicPhase get() = MicPhase.resolve(active, cancelled.get(), error, shellLog, VirtualMicSession.silentHold)
 
@@ -60,7 +63,44 @@ object RootMicController {
 
     @Synchronized fun start(context: Context, target: String, model: String, useOtherProfile: Boolean = false, useAllApps: Boolean = false, useCellular: Boolean = false) {
         check(!active && !VirtualMicSession.isActive && !LiveSession.running)
+        appContext = context.applicationContext
         startRoot(context.applicationContext, target, model, useOtherProfile, useAllApps, useCellular)
+    }
+
+    /**
+     * 只重启 App 侧的转换器：桥接进程和 AudioPolicy 保持注册，游戏在这期间一直拿到静音，
+     * 所以切模型 / 切方案不会再漏出真麦克风。
+     */
+    fun restartConverter(model: String, done: (Boolean) -> Unit) {
+        val ctx = appContext
+        val port = rootPort
+        val token = rootToken
+        if (ctx == null || port == 0 || token.isEmpty() || !active) { done(false); return }
+        restartingConverter = true
+        thread(name = "restart-converter") {
+            var ok = false
+            try {
+                VirtualMicSession.stop()
+                val deadline = SystemClock.elapsedRealtime() + 4000
+                while (VirtualMicSession.isActive && SystemClock.elapsedRealtime() < deadline) Thread.sleep(20)
+                if (!VirtualMicSession.isActive) {
+                    modelName = model
+                    val next = Intent()
+                        .putExtra("virtual_mic_socket", token)
+                        .putExtra("virtual_mic_port", port)
+                        .putExtra("model", model)
+                        .putExtra("bounded_logs", true)
+                        .putExtra("persistent_mic", true)
+                    VirtualMicSession.start(ctx, next)
+                    ok = true
+                }
+            } catch (e: Throwable) {
+                android.util.Log.e("RootMic", "restartConverter failed: ${e.message}", e)
+            } finally {
+                restartingConverter = false
+            }
+            done(ok)
+        }
     }
 
     private fun beginSession(target: String, model: String, useOtherProfile: Boolean, useAllApps: Boolean, useCellular: Boolean): AtomicBoolean {
@@ -145,7 +185,10 @@ object RootMicController {
                     .putExtra("bounded_logs", true).putExtra("persistent_mic", true)
                 VirtualMicSession.start(app, intent)
                 converterStarted = true
-                while (!cancel.get() && VirtualMicSession.isActive) {
+                // restartingConverter 期间会话会短暂停止：这里不能退出，否则 finally 会把桥接一起拆掉，
+                // 那正是「切模型 / 切方案时漏音」的窗口。
+                while (!cancel.get()) {
+                    if (!restartingConverter && !VirtualMicSession.isActive) break
                     status = VirtualMicSession.status
                     if (!p.isAlive) {
                         if (!cancel.get()) error = readableError(

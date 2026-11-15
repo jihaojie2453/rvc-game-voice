@@ -603,6 +603,24 @@ class OverlayService : Service() {
         restarting = true
         idleSince = 0L
         showSwitching(str(R.string.ui_overlay_switching))
+        // 同一个游戏只是换模型/换方案：桥接和 AudioPolicy 都不拆，游戏全程拿到静音。
+        // 之前这里连桥接一起重启，中间有一段没策略的空档，真麦克风就漏进去了。
+        if (RootMicController.active && pkg == RootMicController.targetPackage) {
+            RootMicController.restartConverter(model) { ok ->
+                ui.post {
+                    restarting = false
+                    if (ok) {
+                        ui.postDelayed({ switching?.visibility = View.GONE }, 1200)
+                    } else {
+                        // 热重启失败才退回整条重建
+                        RootMicController.stop()
+                        VirtualMicSession.stop()
+                        awaitIdleThenStart(pkg, model, 0)
+                    }
+                }
+            }
+            return
+        }
         RootMicController.stop()
         VirtualMicSession.stop()
         awaitIdleThenStart(pkg, model, 0)

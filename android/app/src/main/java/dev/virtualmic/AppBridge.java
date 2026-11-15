@@ -41,6 +41,24 @@ final class AppBridge implements Closeable {
     private volatile boolean converterLost;
     private final boolean failClosed;
     private final MicRelay.Trace converted;
+    /** Streaming state and the current connection are swapped under this lock. */
+    private final Object connLock = new Object();
+    private volatile boolean connected;
+    /**
+     * 游戏第一次开麦时听得到「砰」：注入轨从精确的 0 起播，波形是个阶跃。
+     * 这里在起播后做一个 10 ms 的淡入，并且给静音段加一个约 −66 dBFS 的噪声底，
+     * 让游戏的降噪 / VAD / AGC 有稳定的参考（真麦克风永远有本底噪声）。
+     */
+    private int playRamp;
+    private int noiseState = 0x1234567;
+
+    private short noiseFloor() {
+        noiseState ^= noiseState << 13;
+        noiseState ^= noiseState >>> 17;
+        noiseState ^= noiseState << 5;
+        // 低位强制置 1：保证不会取到 0，否则噪声底本身又会往流里塞「精确零」
+        return (short) (((noiseState & 30) - 15) | 1);
+    }
 
     AppBridge(String name, int uid, String trace, boolean failClosed) throws IOException {
         token = name;
@@ -54,32 +72,94 @@ final class AppBridge implements Closeable {
     }
 
     void accept() throws IOException {
-        socket = server.accept();
-        socket.setTcpNoDelay(true);
-        socket.setSoTimeout(45000);
-        input = new DataInputStream(socket.getInputStream());
-        output = new DataOutputStream(socket.getOutputStream());
-        if (input.readInt() != 0x564d4932) throw new IOException("Invalid bridge protocol");
-        if (!token.equals(input.readUTF())) throw new IOException("Invalid bridge token");
-        startDelayMs = input.readInt();
-        if (startDelayMs < 80 || startDelayMs > 1500) throw new IOException("Invalid start delay");
-        output.writeInt(0x564d4932);
-        output.flush();
+        connect(server.accept());
+        Thread re = new Thread(this::reacceptLoop, "bridge-reaccept");
+        re.setDaemon(true);
+        re.start();
+    }
+
+    /**
+     * Handshake on a fresh socket and swap it in. The AudioPolicy and the injected track keep running
+     * across app-side restarts, so the target never falls back to the physical microphone.
+     */
+    private void connect(Socket fresh) throws IOException {
+        fresh.setTcpNoDelay(true);
+        fresh.setSoTimeout(45000);
+        DataInputStream in = new DataInputStream(fresh.getInputStream());
+        DataOutputStream out = new DataOutputStream(fresh.getOutputStream());
+        if (in.readInt() != 0x564d4932) throw new IOException("Invalid bridge protocol");
+        if (!token.equals(in.readUTF())) throw new IOException("Invalid bridge token");
+        int delay = in.readInt();
+        if (delay < 80 || delay > 1500) throw new IOException("Invalid start delay");
+        out.writeInt(0x564d4932);
+        out.flush();
+        Socket previous;
+        synchronized (connLock) {
+            previous = socket;
+            socket = fresh;
+            input = in;
+            output = out;
+            startDelayMs = delay;
+            connected = true;
+        }
+        synchronized (this) { head = 0; queued = 0; }
+        converterLost = false;
+        if (previous != null) try { previous.close(); } catch (IOException ignored) {}
         deadline.shutdownNow();
+        startReader(fresh, in);
+        log("BRIDGE_CONNECTED start_delay_ms=" + delay);
+    }
+
+    /** The app went away: drop the socket, keep the policy registered and hold silence until it is back. */
+    private void dropConnection() {
+        Socket dead;
+        synchronized (connLock) {
+            connected = false;
+            dead = socket;
+            socket = null; input = null; output = null;
+        }
+        if (dead != null) try { dead.close(); } catch (IOException ignored) {}
+        if (closed) return;
+        if (failClosed) {
+            converterLost = true;
+            synchronized (this) { head = 0; queued = 0; }
+            log("BRIDGE_CONVERTER_LOST: holding silence");
+        }
+    }
+
+    private void reacceptLoop() {
+        while (!closed) {
+            boolean need;
+            synchronized (connLock) { need = !connected; }
+            if (!need) { sleepQuietly(50); continue; }
+            try {
+                connect(server.accept());
+            } catch (IOException error) {
+                if (closed) return;
+                sleepQuietly(100);
+            }
+        }
+    }
+
+    private static void sleepQuietly(long ms) {
+        try { Thread.sleep(ms); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+    }
+
+    private void startReader(Socket owner, DataInputStream in) {
         Thread reader = new Thread(() -> {
             try {
-                while (!closed) {
-                    int n = input.readInt();
+                while (!closed && connected) {
+                    int n = in.readInt();
                     if (n == 0) continue; // Idle heartbeat; no PCM follows.
                     if (n == -1) { // Converter has discarded its old input/context/output.
                         synchronized (this) { head = 0; queued = 0; resetPending = false; }
                         continue;
                     }
                     if (n < 1 || n > 48000) throw new IOException("Invalid converted block length " + n);
-                    long sourceStart = input.readLong();
+                    long sourceStart = in.readLong();
                     if (!BridgeTiming.validPosition(sourceStart, suppliedFrames)) throw new IOException("Invalid source position");
                     byte[] pcm = new byte[n * 2];
-                    input.readFully(pcm);
+                    in.readFully(pcm);
                     synchronized (this) {
                         int drop = Math.max(0, queued + n - queue.length);
                         head = (head + drop) % queue.length;
@@ -95,18 +175,39 @@ final class AppBridge implements Closeable {
                     }
                 }
             } catch (IOException error) {
-                if (!closed) {
-                    if (failClosed) {
-                        converterLost = true;
-                        synchronized (this) { head = 0; queued = 0; }
-                        log("BRIDGE_CONVERTER_LOST: holding silence");
-                    } else failure = error;
-                }
+                if (closed) return;
+                Socket current;
+                synchronized (connLock) { current = socket; }
+                if (current == owner) dropConnection();
+                else if (!failClosed) failure = error;
             }
         }, "converted-pcm");
         reader.setDaemon(true);
         reader.start();
-        log("BRIDGE_CONNECTED start_delay_ms="+startDelayMs);
+    }
+
+    private boolean writeInt(int value) {
+        DataOutputStream out;
+        synchronized (connLock) { out = output; }
+        if (out == null) return false;
+        try {
+            out.writeInt(value); out.flush(); return true;
+        } catch (IOException error) {
+            dropConnection();
+            return false;
+        }
+    }
+
+    private boolean writePcm(byte[] pcm, int frames) {
+        DataOutputStream out;
+        synchronized (connLock) { out = output; }
+        if (out == null) return false;
+        try {
+            out.writeInt(frames); out.write(pcm, 0, frames * 2); out.flush(); return true;
+        } catch (IOException error) {
+            dropConnection();
+            return false;
+        }
     }
 
     private synchronized int take(short[] block, long[] sourcePositions) {
@@ -125,12 +226,12 @@ final class AppBridge implements Closeable {
     void idleHeartbeat() throws IOException {
         if (failure != null) throw failure;
         if (closed) throw new IOException("Bridge closed");
-        output.writeInt(0); output.flush();
+        if (!writeInt(0)) throw new IOException("Bridge closed");
     }
 
     void resetCallContext() throws IOException {
         synchronized (this) { resetPending = true; head = 0; queued = 0; }
-        output.writeInt(-1); output.flush();
+        writeInt(-1);
         long deadline = System.nanoTime() + 5_000_000_000L;
         while (resetPending) {
             idleHeartbeat();
@@ -178,7 +279,7 @@ final class AppBridge implements Closeable {
         long lastConverted = start, lastWritten = start, previousReceived = received;
         long nextCheck = 0, lastHeartbeat = 0, segmentStart = start, segmentWritten = 0, segmentCaptured = captured;
         boolean lostHandled = false;
-        if (capturing) { track.play(); log("BRIDGE_BUFFERING: waiting for converted audio"); }
+        if (capturing) { track.play(); playRamp = 480; log("BRIDGE_BUFFERING: waiting for converted audio"); }
         else log("BRIDGE_IDLE: waiting for an app microphone; no start deadline");
         try {
             while (!closed && System.nanoTime() < end) {
@@ -188,6 +289,9 @@ final class AppBridge implements Closeable {
                     gate.reset(); pending = offset = 0; lastOutput = 0; fadingIn = true;
                     lostHandled = true;
                     log("BRIDGE_SILENT_HOLD: converter lost; injecting silence");
+                } else if (!converterLost) {
+                    // 重连之后要清掉，否则第二次掉线不会再重置缓冲
+                    lostHandled = false;
                 }
                 if (call != null && !call.tick()) break;
                 long stateNow = System.nanoTime();
@@ -209,7 +313,7 @@ final class AppBridge implements Closeable {
                         record.stop(); track.pause(); track.flush(); capturing = false;
                         pending = offset = 0; gate.reset(); lastOutput = 0; fadingIn = true;
                         resetPending = true;
-                        output.writeInt(-1); output.flush();
+                        writeInt(-1);
                         log("BRIDGE_IDLE: microphone stopped; waiting for next input");
                     }
                 }
@@ -220,11 +324,11 @@ final class AppBridge implements Closeable {
                         if (record.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING)
                             throw new IOException("Physical microphone did not start");
                         segmentStart = System.nanoTime(); segmentWritten = written; segmentCaptured = captured;
-                        track.play(); capturing = true;
+                        track.play(); playRamp = 480; capturing = true;
                         log("BRIDGE_BUFFERING: waiting for fresh converted audio");
                     } else {
                         if (stateNow - lastHeartbeat >= 1_000_000_000L) {
-                            output.writeInt(0); output.flush(); lastHeartbeat = stateNow;
+                            if (writeInt(0)) lastHeartbeat = stateNow;
                         }
                         Thread.sleep(20);
                         continue;
@@ -239,7 +343,7 @@ final class AppBridge implements Closeable {
                         double v = mic[i] / 32768.0; energy += v*v;
                     }
                     suppliedFrames = captured + n;
-                    output.writeInt(n); output.write(bytes, 0, n*2); output.flush();
+                    writePcm(bytes, n);
                     captured += n;
                 }
                 long now = System.nanoTime();
@@ -266,6 +370,18 @@ final class AppBridge implements Closeable {
                             lastOutput = 0;
                             log("BRIDGE_BUFFERING: refilling converted audio recovery=" + gate.recoveries());
                         }
+                    }
+                    // 块成形时处理一次：静音段填噪声底（别送精确零），起播后先淡入 10 ms。
+                    // 两者都是为了避免「0 ↔ 有声」的阶跃——游戏第一次开麦那下「砰」来自这里。
+                    for (int i = 0; i < out.length; i++) {
+                        short v = out[i];
+                        if (v == 0) v = noiseFloor();
+                        if (playRamp > 0) {
+                            // 从 1/481 起步而不是 0：淡入的第一个采样也不要是精确零
+                            v = (short) (v * (480 - playRamp + 1) / 481);
+                            playRamp--;
+                        }
+                        out[i] = v;
                     }
                     pending = out.length; offset = 0;
                 }
