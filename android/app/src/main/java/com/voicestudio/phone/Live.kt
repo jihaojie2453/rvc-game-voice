@@ -26,7 +26,8 @@ object LivePreferences {
             context = getInt("live_context", LiveParams.defaultContext(block, fade)).coerceIn(0, LiveParams.MAX_CONTEXT),
             crossfade = fade, cushion = getInt("live_cushion_cs", 6).coerceIn(2, 20) / 100.0,
             thresholdDb = getInt("live_threshold_db$mic", if (bluetooth) -45 else -60).coerceIn(-80, -30).toDouble(),
-            gainDb = getInt("live_gain_db", 12).coerceIn(-24, 24).toDouble(), skipQuiet = virtualMic)
+            gainDb = getInt("live_gain_db", 12).coerceIn(-24, 24).toDouble(), skipQuiet = virtualMic,
+            denoise = getInt("live_denoise", 0) != 0)
     }
 }
 
@@ -39,6 +40,9 @@ data class LiveParams(
     val thresholdDb: Double = -60.0, // quieter input than this comes out silent
     val gainDb: Double = 12.0,    // output boost; the input follows a quiet, unprocessed microphone
     val skipQuiet: Boolean = false, // skip inference only after the ENTIRE context is below the existing gate
+    // RNNoise on the 48 kHz capture side, before the ring. Judges noise by spectral structure instead of level,
+    // which the energy gate below cannot do (friction sits 30 dB above any usable threshold).
+    val denoise: Boolean = false,
 ) {
     init { require(context in 0..MAX_CONTEXT) }
 

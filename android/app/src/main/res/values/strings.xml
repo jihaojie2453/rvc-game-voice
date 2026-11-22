@@ -394,6 +394,8 @@
     <string name="help_context">Past audio the model sees with each step. More context can be steadier but uses more compute.</string>
     <string name="help_crossfade">Overlap blended between steps. Too small can click; too large adds delay.</string>
     <string name="help_cushion">Output buffer that hides uneven compute. More buffer means fewer dropouts but more delay.</string>
+    <string name="ui_denoise">Noise suppression (RNNoise)</string>
+    <string name="help_denoise">Judges noise by spectral shape instead of loudness, so rubbing and breathing go quiet while soft speech survives. Adds about 10 ms of delay. Restart the microphone to apply.</string>
     <string name="help_threshold">Inputs quieter than this are not converted. Too high cuts word beginnings; too low lets noise through.</string>
     <string name="ui_config">Configure</string>
     <string name="ui_status">Status</string>

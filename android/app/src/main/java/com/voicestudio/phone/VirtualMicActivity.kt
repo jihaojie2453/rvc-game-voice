@@ -218,7 +218,7 @@ object VirtualMicSession {
                 if (next == block) break
                 block = next; params = params.copy(block = block)
             }
-            log("CONFIG model=${model.name} profile=$profileName block_ms=${block*10} requested_block_ms=${requestedBlock*10} auto_block=$autoBlock context_ms=${params.context*10} window_ms=${params.window(null)*10} crossfade_ms=${params.crossfade*10} cushion_ms=${(params.cushion*1000).roundToInt()} threshold_db=${params.thresholdDb} input_gain_db=$inputDb output_gain_db=${params.gainDb} decoder=$dec threads=$threads bypass=false")
+            log("CONFIG model=${model.name} profile=$profileName block_ms=${block*10} requested_block_ms=${requestedBlock*10} auto_block=$autoBlock context_ms=${params.context*10} window_ms=${params.window(null)*10} crossfade_ms=${params.crossfade*10} cushion_ms=${(params.cushion*1000).roundToInt()} threshold_db=${params.thresholdDb} input_gain_db=$inputDb output_gain_db=${params.gainDb} decoder=$dec threads=$threads bypass=false denoise=${params.denoise}")
             log("OPTIMIZATION fixed_formant=${settings.formant} decoder_frames=${engine!!.decFrames} skip_quiet=${params.skipQuiet}")
             // 热生效：方案文件里的「音色参数」改了就换上新值；音色质感（共振峰）在建会话时已定死，只能重启。
             if (useProfile) {
@@ -244,7 +244,8 @@ object VirtualMicSession {
                             eng.optInt("live_block", params.block) != params.block ||
                             eng.optInt("live_context", params.context) != params.context ||
                             eng.optInt("live_crossfade", params.crossfade) != params.crossfade ||
-                            Math.abs(eng.optDouble("live_cushion_cs", cushionCs.toDouble()) - cushionCs) > 0.5
+                            Math.abs(eng.optDouble("live_cushion_cs", cushionCs.toDouble()) - cushionCs) > 0.5 ||
+                            (eng.optInt("live_denoise", 0) != 0) != params.denoise
                         VirtualMicSession.needsRestart =
                             shapeChanged || Math.abs(fresh.formant - fixedFormant) >= 1e-9
                         log("SETTINGS_APPLIED profile=$profileName pitch=${settings.pitch} formant_fixed=$fixedFormant rms=${settings.rmsMixRate}")
@@ -275,6 +276,8 @@ object VirtualMicSession {
             val persistent = intent.getBooleanExtra("persistent_mic", false)
             val resetRequested = java.util.concurrent.atomic.AtomicBoolean(false)
             VirtualMicSession.inGain = 10.0.pow(inputDb/20.0).toFloat()
+            // 降噪只能在 ring 之前：48 kHz 这一层每票采样只到达一次。见 Denoise.kt 的开头注释。
+            val denoiser = Denoiser.create(params.denoise)
             reader = thread(name="virtual-mic-input") {
                 android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO)
                 try {
@@ -288,11 +291,12 @@ object VirtualMicSession {
                         raw?.append(pcm)
                         val g = VirtualMicSession.inGain
                         for (i in pcm.indices) pcm[i] = LiveCore.softClip(pcm[i]*g)
-                        ring.write(pcm); wake.release()
+                        val k = if (denoiser != null) denoiser.process(pcm) else pcm.size
+                        if (k > 0) { ring.write(pcm, k); wake.release() }
                     }
                 } catch (e: EOFException) { normalEnd = true }
                   catch (e: Throwable) { if (running) captureFailure.set(e) }
-                finally { running = false; wake.release() }
+                finally { denoiser?.close(); running = false; wake.release() }
             }
             var consumed = 0L
             var contextStart = 0L
@@ -315,6 +319,7 @@ object VirtualMicSession {
                     wake.tryAcquire(100,TimeUnit.MILLISECONDS); wake.drainPermits()
                     if (resetRequested.getAndSet(false)) {
                         consumed = ring.total; contextStart = consumed; core.reset(); meter = Meter()
+                        denoiser?.reset()
                         output.writeInt(-1); output.flush()
                         log("IDLE_RESET input_position=$consumed")
                     }
@@ -333,7 +338,7 @@ object VirtualMicSession {
                         if (muted) {
                             // 闭麦：人声这一路不跑推理、整块静音。本地音频还在下面照常叠加，
                             // 所以队友听不到你说话，但照样听得到素材（产品决定）。
-                            if (!mutedBefore) { core.reset(); log("MUTE_ENTER") }
+                            if (!mutedBefore) { core.reset(); denoiser?.reset(); log("MUTE_ENTER") }
                             y = FloatArray(core.b48)
                         } else {
                             // 刚开麦时上一段留下的窗口/SOLA 状态已经对不上了，重来一遍再接

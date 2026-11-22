@@ -40,7 +40,7 @@ object VoiceProfiles {
         "live_block", "live_context", "live_crossfade", "live_cushion_cs",
         "live_threshold_db", "live_threshold_db_bt",
         "live_input_gain_db", "live_input_gain_db_bt", "live_gain_db",
-        "live_split", "live_auto_block",
+        "live_split", "live_auto_block", "live_denoise",
     )
 
     /** 只有迁移和「重置参数」需要知道：[Rvc.Settings] 的出厂值。 */
@@ -190,6 +190,7 @@ object VoiceProfiles {
                     .put("live_gain_db", live.getInt("live_gain_db", 12))
                     .put("live_split", live.getBoolean("live_split", false))
                     .put("live_auto_block", live.getBoolean("live_auto_block", false))
+                    .put("live_denoise", false)
                 write(modelDir, DEFAULT, JSONObject()
                     .put(GROUP_VOICE, voice)
                     .put(GROUP_ENGINE, engine))

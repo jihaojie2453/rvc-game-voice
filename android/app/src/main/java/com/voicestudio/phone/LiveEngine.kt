@@ -295,21 +295,25 @@ class LiveEngine(private val context: Context, private val rvc: Rvc, val params:
 
     private fun captureLoop(rec: AudioRecord) {
         Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
+        // 降噪放在 ring 之前、输入增益之后：和门限看到的是同一条电平，48 kHz 每票采样只经过一次。
+        val denoiser = Denoiser.create(params.denoise)
         val buf = FloatArray(480)
-        while (running) {
-            val n = rec.read(buf, 0, buf.size, AudioRecord.READ_BLOCKING)
-            if (n > 0) {
-                // The tablet microphone is far from the mouth and UNPROCESSED capture has no AGC: without this
-                // boost normal speech sits under the silence gate, which then chops quiet syllables. The virtual
-                // microphone path has always applied the same gain (--es input_gain_db).
-                if (inputGain != 1f) for (i in 0 until n) buf[i] = LiveCore.softClip(buf[i] * inputGain)
-                mic.write(buf, n)
-                wake.release()
-            } else if (n < 0) {
-                log("microphone read failed: $n")
-                Thread.sleep(10)
+        try {
+            while (running) {
+                val n = rec.read(buf, 0, buf.size, AudioRecord.READ_BLOCKING)
+                if (n > 0) {
+                    // The tablet microphone is far from the mouth and UNPROCESSED capture has no AGC: without this
+                    // boost normal speech sits under the silence gate, which then chops quiet syllables. The virtual
+                    // microphone path has always applied the same gain (--es input_gain_db).
+                    if (inputGain != 1f) for (i in 0 until n) buf[i] = LiveCore.softClip(buf[i] * inputGain)
+                    val k = if (denoiser != null) denoiser.process(buf, n) else n
+                    if (k > 0) { mic.write(buf, k); wake.release() }
+                } else if (n < 0) {
+                    log("microphone read failed: $n")
+                    Thread.sleep(10)
+                }
             }
-        }
+        } finally { denoiser?.close() }
     }
 
     private fun renderLoop(trk: AudioTrack) {
@@ -380,7 +384,7 @@ class LiveEngine(private val context: Context, private val rvc: Rvc, val params:
         var lastTiming = rvc.timing.copyOf()
         val setup = "block ${params.block} window ${core.window} (context ${core.window - tail}) crossfade ${params.crossfade} " +
             "search ${params.search} cushion ${params.cushion} threshold ${params.thresholdDb} decoder ${rvc.decoderDevice} " +
-            "dec frames ${rvc.decFrames} bypass $bypass mic ${when (source) {
+            "dec frames ${rvc.decFrames} bypass $bypass denoise ${params.denoise} mic ${when (source) {
                 MediaRecorder.AudioSource.UNPROCESSED -> "unprocessed"
                 MediaRecorder.AudioSource.VOICE_COMMUNICATION -> "voice communication"
                 else -> "voice recognition"

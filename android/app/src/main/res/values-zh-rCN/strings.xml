@@ -170,6 +170,8 @@
     <string name="help_context">模型每次分析时参考的历史音频。越长可能越稳定，但更吃性能。</string>
     <string name="help_crossfade">相邻音频块的平滑重叠。太小会有咔哒声，太大增加延迟。</string>
     <string name="help_cushion">用来抵消计算波动的输出缓冲。越大越不容易断音，但延迟更高。</string>
+    <string name="ui_denoise">降噪（RNNoise）</string>
+    <string name="help_denoise">按频谱形状而不是音量判断噪声：摩擦、气声被压掉，轻声照样通过。会增加约 10 ms 延迟，需重启虚拟麦生效。</string>
     <string name="help_threshold">低于此音量的输入不进行转换。太高会吞掉字头，太低会放大底噪。</string>
     <string name="ui_conversion_error">转换错误：%1$s</string>
     <string name="ui_an_error_occurred_during_conversion">转换时发生错误。</string>

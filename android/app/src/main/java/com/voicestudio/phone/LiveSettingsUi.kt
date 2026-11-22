@@ -131,6 +131,24 @@ class LiveSettingsUi(private val context: Context, private val prefs: () -> Mode
         setting("live_input_gain_db$mic", R.string.ui_input_gain, 0, 24, "0 dB", "+24 dB",
             { prefs().getInt("live_input_gain_db$mic", if (bt) 0 else 12) }, { String.format(Locale.US, "%+d dB", it) },
             str(R.string.help_input_gain))
+        var refreshingDenoise = false
+        val denoise = Switch(context).apply {
+            text = str(R.string.ui_denoise); textSize = 13f
+            setOnCheckedChangeListener { _, on ->
+                if (!refreshingDenoise) { prefs().putInt("live_denoise", if (on) 1 else 0); changed() }
+            }
+        }
+        val refreshDenoise = {
+            refreshingDenoise = true
+            denoise.isChecked = prefs().getInt("live_denoise", 0) != 0
+            refreshingDenoise = false
+        }
+        refreshers.add(refreshDenoise); refreshDenoise()
+        parent.addView(denoise)
+        parent.addView(TextView(context).apply {
+            text = str(R.string.help_denoise); textSize = 11f; setTextColor(context.getColor(R.color.muted))
+            setPadding(0, dp(2), 0, 0); setLineSpacing(dp(2).toFloat(), 1f)
+        })
     }
 
     fun outputGain(parent: LinearLayout) = slider(parent, str(R.string.ui_output_gain), -24, 24, "−24 dB", "+24 dB",

@@ -518,6 +518,7 @@ class MainActivity : Activity() {
         seed(engine, "live_gain_db", legacyLive.getInt("live_gain_db", 12).toDouble())
         seed(engine, "live_split", if (legacyLive.getBoolean("live_split", false)) 1.0 else 0.0)
         seed(engine, "live_auto_block", if (legacyLive.getBoolean("live_auto_block", false)) 1.0 else 0.0)
+        seed(engine, "live_denoise", if (legacyLive.getBoolean("live_denoise", false)) 1.0 else 0.0)
 
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(4), dp(20), dp(4))
@@ -605,6 +606,11 @@ class MainActivity : Activity() {
         param(engine, "live_input_gain_db", str(R.string.ui_input_gain), 0.0, 24.0, 1.0, 12.0, 1.0, { db(it) })
         param(engine, "live_gain_db", str(R.string.ui_output_gain), -24.0, 24.0, 1.0, 12.0, 1.0, { db(it) })
         switchParam(engine, "live_split", str(R.string.ui_split_decoder_npu_bit_cpu), false)
+        switchParam(engine, "live_denoise", str(R.string.ui_denoise), false)
+        body.addView(TextView(this).apply {
+            text = str(R.string.help_denoise); textSize = 11f; setTextColor(getColor(R.color.muted))
+            setPadding(0, dp(2), 0, 0); setLineSpacing(dp(2).toFloat(), 1f)
+        })
 
         heading(str(R.string.ui_model_settings))
         val computeKeys = arrayOf("follow", "cpu", "npu")
