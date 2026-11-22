@@ -72,7 +72,11 @@ Java_com_voicestudio_phone_NcnnDecoder_nativeDecode(JNIEnv* env, jclass, jlong h
     auto* d = reinterpret_cast<Decoder*>(handle);
     const jsize nz = env->GetArrayLength(z);
     const jsize ns = env->GetArrayLength(sine);
-    if (frames <= 0 || nz != 192LL * frames || (ns != frames * 480LL && ns != frames * 320LL)) return nullptr;
+    // The native hop follows the model's sample rate: 320 (32 kHz), 400 (40 kHz), 480 (48 kHz).
+    // It is derived from the excitation length instead of being fixed, so a 40 kHz decoder is not rejected.
+    if (frames <= 0 || nz != 192LL * frames || ns % frames != 0) return nullptr;
+    const int hop = ns / frames;
+    if (hop != 320 && hop != 400 && hop != 480) return nullptr;
     std::vector<float> zb(nz), sb(ns);
     env->GetFloatArrayRegion(z, 0, nz, zb.data());
     env->GetFloatArrayRegion(sine, 0, ns, sb.data());

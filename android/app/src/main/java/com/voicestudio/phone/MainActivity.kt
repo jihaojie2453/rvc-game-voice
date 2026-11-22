@@ -603,7 +603,7 @@ class MainActivity : Activity() {
         param(engine, "live_cushion_cs", str(R.string.ui_output_buffer_reduce_dropouts), 0.02, 0.20, 0.01, 0.06, 0.01, { seconds(it) })
         param(engine, "live_threshold_db", str(R.string.ui_silence_threshold), -80.0, -30.0, 1.0, -60.0, 1.0, { db(it) })
         param(engine, "live_input_gain_db", str(R.string.ui_input_gain), 0.0, 24.0, 1.0, 12.0, 1.0, { db(it) })
-        param(engine, "live_gain_db", str(R.string.ui_output_gain), -12.0, 24.0, 1.0, 12.0, 1.0, { db(it) })
+        param(engine, "live_gain_db", str(R.string.ui_output_gain), -24.0, 24.0, 1.0, 12.0, 1.0, { db(it) })
         switchParam(engine, "live_split", str(R.string.ui_split_decoder_npu_bit_cpu), false)
 
         heading(str(R.string.ui_model_settings))

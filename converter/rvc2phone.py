@@ -9,7 +9,8 @@ It also writes the decoder in two pieces, NAME.dec_a.onnx (the first three upsam
 which survive 16-bit: the phone runs them on the NPU) and NAME.dec_b.onnx (the last stage and the output layer,
 which do not: they stay 32-bit on the GPU). Measured on the PC, 16 bits up to there changed the spectrum by
 0.07-0.17 dB, the last stage alone by 0.6-0.8 dB and the output layer alone by 3.4 dB.
-RVC v2 models at 32 or 48 kHz with pitch (f0) are supported; v1, 40k and no-pitch models are refused.
+RVC v2 models at 32, 40 or 48 kHz with pitch (f0) are supported; v1 and no-pitch models are refused.
+40 kHz models keep their native rate in the decoder; the app resamples them to 48 kHz for output.
 
 For Android's NPU it also makes NAME.dec.w8a16.onnx: the decoder with 8-bit weights and 16-bit activations, which
 sounds like the 32-bit decoder at the NPU's speed (the app uses it when it is there). That needs a few minutes of

@@ -26,7 +26,7 @@ object LivePreferences {
             context = getInt("live_context", LiveParams.defaultContext(block, fade)).coerceIn(0, LiveParams.MAX_CONTEXT),
             crossfade = fade, cushion = getInt("live_cushion_cs", 6).coerceIn(2, 20) / 100.0,
             thresholdDb = getInt("live_threshold_db$mic", if (bluetooth) -45 else -60).coerceIn(-80, -30).toDouble(),
-            gainDb = getInt("live_gain_db", 12).coerceIn(-12, 24).toDouble(), skipQuiet = virtualMic)
+            gainDb = getInt("live_gain_db", 12).coerceIn(-24, 24).toDouble(), skipQuiet = virtualMic)
     }
 }
 
@@ -193,8 +193,11 @@ class LiveCore(private val rvc: Rvc, val params: LiveParams) {
         val level = medianFrameRmsAt(x48, w48 - b48)
         val speaking = judgeSpeech(level)
         idleBlocks = if (hasVoice(level)) 0 else idleBlocks + 1
-        if (params.skipQuiet && allowQuietSkip && !bypass &&
-            (idleBlocks >= skipAfterBlocks || isQuietContext(x48, threshold))) {
+        // 跳过只看「最新这一块」：整块都低于门限才跳过。
+        // 但门限还开着（holdLeft > 0，即刚说完话的 0.3 秒）时不许跳过：否则尾音会被整块切成数字静音，
+        // 听感就是「最后一个字说一半就没了」。让门限自己用 50 ms 淡出收尾。
+        if (params.skipQuiet && allowQuietSkip && !bypass && holdLeft <= 0 &&
+            blockIsQuiet(x48, w48, b48, threshold)) {
             if (!skipping) { reset(); skipping = true }
             lastSkippedQuiet = true
             lastInPeak = x48.maxOfOrNull { abs(it) } ?: 0f
@@ -238,6 +241,8 @@ class LiveCore(private val rvc: Rvc, val params: LiveParams) {
             var energy = 0f
             for (k in a until a + 480) energy += input[k] * input[k]
             frameRms[f] = sqrt(energy / 480)
+            // 试过迟滞（已打开时降到 threshold−10 dB 才关），结果是模型在接近静音的输入上生成的气声
+            // 也被放了出来，听感更机械、带失真。所以仍然按门限本身开关，只靠 0.3 秒保持保住尾音。
             if (frameRms[f] >= threshold) holdLeft = gateHold
             for (k in a until a + 480) {
                 gate = if (holdLeft > 0) min(1f, gate + gateAttack) else max(0f, gate - gateRelease)
@@ -264,6 +269,21 @@ class LiveCore(private val rvc: Rvc, val params: LiveParams) {
     fun heard(x48: FloatArray): FloatArray = x48.copyOfRange(w48 - tail * 480, w48 - tail * 480 + b48)
 
     companion object {
+        /** 只检查最新一块（[len] 个采样）是否每个 10 ms 帧都低于门限。 */
+        fun blockIsQuiet(x48: FloatArray, end: Int, len: Int, threshold: Float): Boolean {
+            if (threshold <= 0f || !threshold.isFinite()) return false
+            val start = max(0, end - len)
+            var a = start
+            while (a < end) {
+                val b = min(a + 480, end)
+                var energy = 0.0
+                for (k in a until b) energy += x48[k].toDouble() * x48[k]
+                if (!energy.isFinite() || energy >= threshold.toDouble() * threshold * (b - a)) return false
+                a = b
+            }
+            return true
+        }
+
         /** Do not discard words merely because the latest block is quiet: inspect all historical context too. */
         fun isQuietContext(x: FloatArray, threshold: Float): Boolean {
             if (x.size < 48000 * 3 / 10 || threshold <= 0 || !threshold.isFinite()) return false

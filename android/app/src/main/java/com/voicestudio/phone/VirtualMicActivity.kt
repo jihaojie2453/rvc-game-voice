@@ -193,7 +193,7 @@ object VirtualMicSession {
                 pInt(if (bluetoothMic) "live_input_gain_db_bt" else "live_input_gain_db",
                     if (bluetoothMic) 0 else 12).toFloat()).also { require(it in 0f..36f) }
             val threshold = intent.getFloatExtra("threshold_db",saved.thresholdDb.toFloat()).also { require(it in -120f..-30f) }
-            val outputDb = intent.getFloatExtra("gain_db",saved.gainDb.toFloat()).also { require(it in -12f..36f) }
+            val outputDb = intent.getFloatExtra("gain_db",saved.gainDb.toFloat()).also { require(it in -24f..36f) }
             var params = saved.copy(block = block,
                 context = intent.getIntExtra("context", pInt("live_context", LiveParams.defaultContext(block, saved.crossfade))), thresholdDb = threshold.toDouble(), gainDb = outputDb.toDouble(),
                 skipQuiet = !intent.getBooleanExtra("no_quiet_skip",false))

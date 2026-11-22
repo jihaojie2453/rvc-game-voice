@@ -9,7 +9,7 @@ data class ModelSpec(val sampleRate: Int = 48000, val hopLength: Int = sampleRat
                      val splitHiddenHop: Int = hopLength / 2, val formatVersion: Int = 1) {
     init {
         require(formatVersion == 1) { "Unsupported model metadata version: $formatVersion" }
-        require(sampleRate == 32000 || sampleRate == 48000) { "Unsupported model sample rate: $sampleRate" }
+        require(sampleRate == 32000 || sampleRate == 40000 || sampleRate == 48000) { "Unsupported model sample rate: $sampleRate" }
         require(hopLength == sampleRate / 100) { "Model sample rate and hop length disagree" }
         require(splitHiddenHop > 0 && hopLength % splitHiddenHop == 0) { "Invalid split decoder geometry" }
     }

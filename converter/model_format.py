@@ -4,12 +4,12 @@ import json
 import math
 from pathlib import Path
 
-SUPPORTED_RATES = (32000, 48000)
+SUPPORTED_RATES = (32000, 40000, 48000)
 
 
 def sample_rate(value):
     rate = (
-        {"32k": 32000, "48k": 48000}.get(value, value)
+        {"32k": 32000, "40k": 40000, "48k": 48000}.get(value, value)
         if isinstance(value, str)
         else value
     )

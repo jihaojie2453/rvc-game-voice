@@ -133,7 +133,7 @@ class LiveSettingsUi(private val context: Context, private val prefs: () -> Mode
             str(R.string.help_input_gain))
     }
 
-    fun outputGain(parent: LinearLayout) = slider(parent, str(R.string.ui_output_gain), -12, 24, "−12 dB", "+24 dB",
+    fun outputGain(parent: LinearLayout) = slider(parent, str(R.string.ui_output_gain), -24, 24, "−24 dB", "+24 dB",
         { params().gainDb.toInt() }, { prefs().putInt("live_gain_db", it) },
         { String.format(Locale.US, "%+d dB", it) }, str(R.string.help_gain))
 }

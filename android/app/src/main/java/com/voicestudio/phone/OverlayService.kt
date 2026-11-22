@@ -260,7 +260,7 @@ class OverlayService : Service() {
         val left = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
 
         // 五个常用参数
-        slider(left, str(R.string.ui_output_gain), -12.0, 24.0, 1.0, "live_gain_db") { v ->
+        slider(left, str(R.string.ui_output_gain), -24.0, 24.0, 1.0, "live_gain_db") { v ->
             setParam(VoiceProfiles.GROUP_ENGINE, "live_gain_db", v)
         }
         slider(left, str(R.string.ui_input_gain), 0.0, 24.0, 1.0, "live_input_gain_db") { v ->
